@@ -32,6 +32,6 @@
 			"binding": "KV"
 		}
 	]
-	// No secrets_store_secrets — YOUTUBE_API_KEY / FIRECRAWL_API_TOKEN are provided
+	// No secrets_store_secrets — OIDC_SIGNING_KEY / FIRECRAWL_API_TOKEN are provided
 	// via miniflare serviceBindings in vitest.config.ts.
 }

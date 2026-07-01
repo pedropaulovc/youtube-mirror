@@ -7,7 +7,7 @@ export default defineConfig({
 			wrangler: { configPath: "./wrangler.test.jsonc" },
 			miniflare: {
 				serviceBindings: {
-					YOUTUBE_API_KEY: { name: "test-secret-worker", entrypoint: "TestSecret" },
+					OIDC_SIGNING_KEY: { name: "test-secret-worker", entrypoint: "TestSecret" },
 					FIRECRAWL_API_TOKEN: { name: "test-secret-worker", entrypoint: "TestSecret" },
 				},
 				workers: [

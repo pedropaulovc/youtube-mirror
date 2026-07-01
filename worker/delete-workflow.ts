@@ -1,6 +1,7 @@
 import { WorkflowEntrypoint, WorkflowStep } from "cloudflare:workers";
 import type { WorkflowEvent } from "cloudflare:workers";
 import { checkVideosExist } from "./youtube-api";
+import { getYouTubeAccessToken } from "./gcp-token";
 import { getAuthenticatedClient } from "./bluesky";
 import type { BlueskyClient } from "./bluesky";
 import { stepDo } from "./step";
@@ -52,7 +53,7 @@ export class MirrorDeleteWorkflow extends WorkflowEntrypoint<Env, MirrorDeleteWo
 			return;
 		}
 
-		const apiKey = await this.env.YOUTUBE_API_KEY.get();
+		const accessToken = await stepDo<string>(step, `youtube-token-${channelId}`, () => getYouTubeAccessToken(this.env));
 		const videoIds = entries.map((e) => e.itemId);
 
 		// `checkVideosExist` throws (via ytFetch) on any non-OK API response, so a
@@ -60,7 +61,7 @@ export class MirrorDeleteWorkflow extends WorkflowEntrypoint<Env, MirrorDeleteWo
 		// video is gone — common when a single recent upload is later deleted. Don't
 		// guard on size === 0: that would strand the cleanup exactly when it's needed.
 		const existing = await stepDo<string[]>(step, `check-existence-${channelId}`, async () => {
-			const alive = await checkVideosExist(videoIds, apiKey);
+			const alive = await checkVideosExist(videoIds, accessToken);
 			return [...alive];
 		});
 		const existingIds: Set<string> = new Set(existing);

@@ -1,6 +1,6 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "mirror-channel",
+	"name": "youtube-mirror-channel",
 	"main": "worker/mirror-channel.ts",
 	"compatibility_date": "2025-10-08",
 	"compatibility_flags": ["nodejs_compat"],
@@ -13,50 +13,59 @@
 	// is defined by this script; the others are cross-script bindings.
 	"workflows": [
 		{
-			"name": "mirror-channel",
+			"name": "youtube-mirror-channel",
 			"binding": "CHANNEL_WORKFLOW",
 			"class_name": "MirrorChannelWorkflow"
 		},
 		{
-			"name": "mirror-item",
+			"name": "youtube-mirror-item",
 			"binding": "ITEM_WORKFLOW",
 			"class_name": "MirrorItemWorkflow",
-			"script_name": "mirror-item"
+			"script_name": "youtube-mirror-item"
 		},
 		{
-			"name": "mirror-delete",
+			"name": "youtube-mirror-delete",
 			"binding": "DELETE_CHECK_WORKFLOW",
 			"class_name": "MirrorDeleteWorkflow",
-			"script_name": "mirror-delete"
+			"script_name": "youtube-mirror-delete"
 		},
 		{
-			"name": "mirror-profile",
+			"name": "youtube-mirror-profile",
 			"binding": "PROFILE_SYNC_WORKFLOW",
 			"class_name": "MirrorProfileWorkflow",
-			"script_name": "mirror-profile"
+			"script_name": "youtube-mirror-profile"
 		}
 	],
 	"triggers": {
 		"crons": ["* * * * *"]
 	},
 	"upload_source_maps": true,
+	// Federation identity for YouTube Data API access via GCP Workload Identity
+	// Federation (replaces a static API key). OIDC_SIGNING_KEY is bound from the
+	// Secrets Store below. See infra/federation.md.
+	"vars": {
+		"OIDC_ISSUER_URL": "https://youtube-mirror-oidc-issuer.pedro-18e.workers.dev",
+		"OIDC_SIGNING_KID": "03c90718",
+		"GCP_WORKLOAD_PROVIDER": "//iam.googleapis.com/projects/410438001325/locations/global/workloadIdentityPools/cloudflare-workers/providers/youtube-mirror-oidc",
+		"GCP_SERVICE_ACCOUNT": "youtube-mirror-cf@youtube-mirror-501119.iam.gserviceaccount.com"
+	},
 	// Placeholder IDs — replace with real resources at provision/deploy time
 	// (see AGENTS.md "Deployment"). Dry-run builds don't contact the API.
 	"kv_namespaces": [
 		{
-			"id": "0000000000000000000000000000youtube",
+			"id": "4678dd1b9ac742439e0a0b029b1e9d03",
 			"binding": "KV"
 		}
 	],
 	"secrets_store_secrets": [
 		{
-			"binding": "YOUTUBE_API_KEY",
-			"store_id": "00000000000000000000000000000000",
-			"secret_name": "youtube-mirror-youtube-api-key"
+			"binding": "OIDC_SIGNING_KEY",
+			"store_id": "f0c7662b60484d17a094e384a3853ab9",
+			"secret_name": "youtube-mirror-oidc-signing-key"
 		},
 		{
 			"binding": "FIRECRAWL_API_TOKEN",
-			"store_id": "00000000000000000000000000000000",
+			"store_id": "f0c7662b60484d17a094e384a3853ab9",
 			"secret_name": "youtube-mirror-firecrawl-api-token"
 		}
 	]

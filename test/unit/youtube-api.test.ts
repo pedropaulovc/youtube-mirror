@@ -104,6 +104,23 @@ describe("youtube-api", () => {
 		});
 	});
 
+	describe("auth", () => {
+		it("authenticates with a Bearer access token, not an API key query param", async () => {
+			let capturedUrl = "";
+			let capturedInit: RequestInit | undefined;
+			vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+				capturedUrl = String(url);
+				capturedInit = init as RequestInit;
+				return jsonResponse({ items: [topThread("t1", "2026-06-01T10:00:00Z")] });
+			});
+
+			await fetchComments("vidX", TEST_CHANNEL_ID, "ya29.sa-token");
+
+			expect(new URL(capturedUrl).searchParams.get("key")).toBeNull();
+			expect((capturedInit?.headers as Record<string, string>).Authorization).toBe("Bearer ya29.sa-token");
+		});
+	});
+
 	describe("fetchComments", () => {
 		it("requests plain-text comment bodies (textFormat=plainText)", async () => {
 			const urls: string[] = [];

@@ -105,12 +105,13 @@ interface ChannelsResponse {
 
 // --- Fetch core -----------------------------------------------------------
 
-async function ytFetch<T>(path: string, params: { [key: string]: string }, apiKey: string): Promise<T> {
+async function ytFetch<T>(path: string, params: { [key: string]: string }, accessToken: string): Promise<T> {
 	const url = new URL(`${YOUTUBE_API_BASE}/${path}`);
 	for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-	url.searchParams.set("key", apiKey);
 
-	const res = await fetch(url.toString());
+	const res = await fetch(url.toString(), {
+		headers: { Authorization: `Bearer ${accessToken}` },
+	});
 	if (!res.ok) {
 		const body = await res.text().catch(() => "");
 		throw new Error(`YouTube API ${path} failed: ${res.status} ${body.slice(0, 300)}`);
@@ -131,7 +132,7 @@ function pickThumbnail(t: Thumbnails | undefined): Thumbnail | undefined {
 export async function fetchRecentVideoIds(
 	uploadsId: string,
 	maxItems: number,
-	apiKey: string,
+	accessToken: string,
 ): Promise<string[]> {
 	const ids: string[] = [];
 	let pageToken: string | undefined;
@@ -142,7 +143,7 @@ export async function fetchRecentVideoIds(
 			maxResults: String(Math.min(PLAYLIST_PAGE_SIZE, maxItems - ids.length)),
 		};
 		if (pageToken) params.pageToken = pageToken;
-		const data = await ytFetch<PlaylistItemsResponse>("playlistItems", params, apiKey);
+		const data = await ytFetch<PlaylistItemsResponse>("playlistItems", params, accessToken);
 		for (const item of data.items ?? []) {
 			const id = item.contentDetails?.videoId;
 			if (id) ids.push(id);
@@ -154,14 +155,14 @@ export async function fetchRecentVideoIds(
 }
 
 /** Fetch full video details (batched ≤50 IDs per call, 1 unit each). */
-export async function fetchVideos(videoIds: string[], apiKey: string): Promise<VideoItem[]> {
+export async function fetchVideos(videoIds: string[], accessToken: string): Promise<VideoItem[]> {
 	const videos: VideoItem[] = [];
 	for (let i = 0; i < videoIds.length; i += 50) {
 		const batch = videoIds.slice(i, i + 50);
 		const data = await ytFetch<VideosResponse>(
 			"videos",
 			{ part: "snippet,contentDetails", id: batch.join(",") },
-			apiKey,
+			accessToken,
 		);
 		for (const v of data.items ?? []) {
 			videos.push(normalizeVideo(v));
@@ -200,7 +201,7 @@ export function normalizeVideo(v: VideoResource): VideoItem {
 export async function fetchComments(
 	videoId: string,
 	channelId: string,
-	apiKey: string,
+	accessToken: string,
 	after?: string,
 	maxThreads: number = 100,
 ): Promise<CommentItem[]> {
@@ -225,7 +226,7 @@ export async function fetchComments(
 
 		let data: CommentThreadsResponse;
 		try {
-			data = await ytFetch<CommentThreadsResponse>("commentThreads", params, apiKey);
+			data = await ytFetch<CommentThreadsResponse>("commentThreads", params, accessToken);
 		} catch (err) {
 			// Comments disabled on a video → 403. Non-fatal; skip this video.
 			warn({ tag: "yt-comments", videoId, message: `commentThreads fetch failed for ${videoId}`, error: String(err) });
@@ -242,7 +243,7 @@ export async function fetchComments(
 			newestInPage = Math.max(newestInPage, topMs);
 			if (topMs > afterMs) out.push(topItem);
 
-			await appendThreadReplies(out, thread, topItem.id, channelId, videoId, apiKey, afterMs);
+			await appendThreadReplies(out, thread, topItem.id, channelId, videoId, accessToken, afterMs);
 		}
 
 		// Threads are newest-first: once an entire page predates the cursor, every
@@ -266,7 +267,7 @@ async function appendThreadReplies(
 	topCommentId: string,
 	channelId: string,
 	videoId: string,
-	apiKey: string,
+	accessToken: string,
 	afterMs: number,
 ): Promise<void> {
 	const inline = thread.replies?.comments ?? [];
@@ -275,7 +276,7 @@ async function appendThreadReplies(
 	if (total > inline.length) {
 		try {
 			const afterIso = Number.isFinite(afterMs) ? new Date(afterMs).toISOString() : undefined;
-			const replies = await fetchCommentReplies(topCommentId, channelId, videoId, apiKey, afterIso);
+			const replies = await fetchCommentReplies(topCommentId, channelId, videoId, accessToken, afterIso);
 			out.push(...replies);
 			return;
 		} catch (err) {
@@ -316,11 +317,11 @@ export function normalizeComment(
 }
 
 /** Fetch channel branding for profile sync. */
-export async function fetchChannelInfo(channelId: string, apiKey: string): Promise<ChannelInfo | null> {
+export async function fetchChannelInfo(channelId: string, accessToken: string): Promise<ChannelInfo | null> {
 	const data = await ytFetch<ChannelsResponse>(
 		"channels",
 		{ part: "snippet,brandingSettings,contentDetails", id: channelId },
-		apiKey,
+		accessToken,
 	);
 	const item = data.items?.[0];
 	if (!item) return null;
@@ -335,11 +336,11 @@ export async function fetchChannelInfo(channelId: string, apiKey: string): Promi
 }
 
 /** Confirm which of the given video IDs still exist (delete-check). */
-export async function checkVideosExist(videoIds: string[], apiKey: string): Promise<Set<string>> {
+export async function checkVideosExist(videoIds: string[], accessToken: string): Promise<Set<string>> {
 	const alive: Set<string> = new Set();
 	for (let i = 0; i < videoIds.length; i += 50) {
 		const batch = videoIds.slice(i, i + 50);
-		const data = await ytFetch<VideosResponse>("videos", { part: "id", id: batch.join(",") }, apiKey);
+		const data = await ytFetch<VideosResponse>("videos", { part: "id", id: batch.join(",") }, accessToken);
 		for (const v of data.items ?? []) alive.add(v.id);
 	}
 	return alive;
@@ -350,7 +351,7 @@ export async function fetchCommentReplies(
 	parentCommentId: string,
 	channelId: string,
 	videoId: string,
-	apiKey: string,
+	accessToken: string,
 	after?: string,
 ): Promise<CommentItem[]> {
 	const afterMs = after ? new Date(after).getTime() : -Infinity;
@@ -359,7 +360,7 @@ export async function fetchCommentReplies(
 	do {
 		const params: { [key: string]: string } = { part: "snippet", parentId: parentCommentId, maxResults: "100", textFormat: "plainText" };
 		if (pageToken) params.pageToken = pageToken;
-		const data = await ytFetch<CommentsListResponse>("comments", params, apiKey);
+		const data = await ytFetch<CommentsListResponse>("comments", params, accessToken);
 		for (const c of data.items ?? []) {
 			const item = normalizeComment(c, channelId, videoId, parentCommentId, "comment");
 			if (new Date(item.publishedAt).getTime() > afterMs) out.push(item);

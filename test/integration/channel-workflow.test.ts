@@ -42,6 +42,7 @@ describe.sequential("MirrorChannelWorkflow orchestration", () => {
 		// the filter step yields no new items to dispatch.
 		await env.KV.put(`mirrored:${TEST_CHANNEL_ID}:${video.id}`, JSON.stringify({ bskyUri: "at://x", bskyCid: "c", account: "main", kind: "video", createdAt: new Date().toISOString() }));
 		await instance.modify(async (m) => {
+			await m.mockStepResult({ name: `youtube-token-${TEST_CHANNEL_ID}` }, "fake-token");
 			await m.mockStepResult({ name: `fetch-videos-${TEST_CHANNEL_ID}` }, [video]);
 		});
 
@@ -61,6 +62,7 @@ describe.sequential("MirrorChannelWorkflow orchestration", () => {
 		const instanceId = `channel-dispatch-${Date.now()}`;
 		await using instance = await introspectWorkflowInstance(env.CHANNEL_WORKFLOW, instanceId);
 		await instance.modify(async (m) => {
+			await m.mockStepResult({ name: `youtube-token-${TEST_CHANNEL_ID}` }, "fake-token");
 			await m.mockStepResult({ name: `fetch-videos-${TEST_CHANNEL_ID}` }, [video]);
 		});
 

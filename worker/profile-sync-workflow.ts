@@ -2,6 +2,7 @@ import { WorkflowEntrypoint, WorkflowStep } from "cloudflare:workers";
 import type { WorkflowEvent } from "cloudflare:workers";
 import { fetchChannelInfo } from "./youtube-api";
 import type { ChannelInfo } from "./youtube-api";
+import { getYouTubeAccessToken } from "./gcp-token";
 import { getAuthenticatedClient, resolveHandleToDid, queryModerationLabels } from "./bluesky";
 import { stepDo } from "./step";
 import type { ChannelConfig } from "./types";
@@ -54,8 +55,8 @@ export class MirrorProfileWorkflow extends WorkflowEntrypoint<Env, MirrorProfile
 		});
 
 		const info = await stepDo<ChannelInfo | null>(step, `fetch-profile-${channelId}`, async () => {
-			const apiKey = await this.env.YOUTUBE_API_KEY.get();
-			return fetchChannelInfo(channelId, apiKey);
+			const accessToken = await getYouTubeAccessToken(this.env);
+			return fetchChannelInfo(channelId, accessToken);
 		});
 
 		if (!info) {

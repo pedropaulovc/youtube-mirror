@@ -1,6 +1,7 @@
 import { WorkflowEntrypoint, WorkflowStep } from "cloudflare:workers";
 import type { WorkflowEvent } from "cloudflare:workers";
 import { fetchRecentVideoIds, fetchVideos, fetchComments, uploadsPlaylistId } from "./youtube-api";
+import { getYouTubeAccessToken } from "./gcp-token";
 import { fetchCommunityPosts } from "./firecrawl";
 import { createWorkflowWithRetry } from "./cron-dispatch";
 import { stepDo } from "./step";
@@ -31,14 +32,14 @@ export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannel
 			return config;
 		});
 
-		const apiKey = await this.env.YOUTUBE_API_KEY.get();
+		const accessToken = await stepDo<string>(step, `youtube-token-${channelId}`, () => getYouTubeAccessToken(this.env));
 		const maxItems = Math.max(1, Math.min(MAX_ITEMS_LIMIT, channelConfig.maxItems ?? DEFAULT_MAX_ITEMS));
 		const uploadsId = channelConfig.uploadsPlaylistId ?? uploadsPlaylistId(channelId);
 
 		// Step 2: Fetch recent videos
 		const videos = await stepDo<VideoItem[]>(step, `fetch-videos-${channelId}`, async () => {
-			const ids = await fetchRecentVideoIds(uploadsId, maxItems, apiKey);
-			return ids.length > 0 ? fetchVideos(ids, apiKey) : [];
+			const ids = await fetchRecentVideoIds(uploadsId, maxItems, accessToken);
+			return ids.length > 0 ? fetchVideos(ids, accessToken) : [];
 		});
 
 		// Step 3: Filter already-mirrored videos, dispatch the rest
@@ -64,7 +65,7 @@ export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannel
 		// Step 5: Comments on recently-mirrored videos (video comments come from the
 		// Data API). Only poll videos already mirrored so the parent post exists.
 		if (channelConfig.mirrorComments !== false) {
-			await this.pollComments(channelId, channelConfig, videos, apiKey, workflowId, step);
+			await this.pollComments(channelId, channelConfig, videos, accessToken, workflowId, step);
 		}
 
 		// Step 6: Record change-detection snapshot for the next cycle
@@ -109,7 +110,7 @@ export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannel
 		channelId: string,
 		channelConfig: ChannelConfig,
 		videos: VideoItem[],
-		apiKey: string,
+		accessToken: string,
 		workflowId: string,
 		step: WorkflowStep,
 	): Promise<void> {
@@ -125,7 +126,7 @@ export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannel
 
 			const newComments = await stepDo<CommentItem[]>(step, `fetch-comments-${video.id}`, async () => {
 				const cursor = await this.env.KV.get(`comment-cursor:${channelId}:${video.id}`, "text");
-				const comments = await fetchComments(video.id, channelId, apiKey, cursor ?? undefined);
+				const comments = await fetchComments(video.id, channelId, accessToken, cursor ?? undefined);
 				return this.filterNew(channelId, comments);
 			});
 

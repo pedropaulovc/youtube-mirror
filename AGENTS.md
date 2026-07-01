@@ -8,7 +8,7 @@ architecture. The channel's own content (videos, community posts) goes to a
 ## Commands
 
 ```bash
-npm run dev          # wrangler dev (mirror-channel worker)
+npm run dev          # wrangler dev (youtube-mirror-channel worker)
 npm run build        # dry-run deploy every wrangler.mirror-*.jsonc (compile check)
 npm run lint         # eslint
 npm run typecheck    # tsc --noEmit
@@ -25,11 +25,11 @@ npm run cf-typegen   # regenerate worker-configuration.d.ts after editing a wran
 
 | Worker | Workflow class | Cron | Purpose |
 |--------|---------------|------|---------|
-| `mirror-channel` | `MirrorChannelWorkflow` | `* * * * *` | Poll uploads playlist + community tab, filter already-mirrored, dispatch item workflows; poll comments on recent videos |
-| `mirror-item` | `MirrorItemWorkflow` | none (binding) | Mirror a single video / community post / comment (router → handlers) |
-| `mirror-delete` | `MirrorDeleteWorkflow` | `0 * * * *` | Detect removed videos, delete their Bluesky posts |
-| `mirror-profile` | `MirrorProfileWorkflow` | `0 * * * *` | Sync channel title/description/avatar/banner → Bluesky |
-| `mirror-telemetry-gateway` | — | — | OTLP → Azure App Insights forwarder (standalone) |
+| `youtube-mirror-channel` | `MirrorChannelWorkflow` | `* * * * *` | Poll uploads playlist + community tab, filter already-mirrored, dispatch item workflows; poll comments on recent videos |
+| `youtube-mirror-item` | `MirrorItemWorkflow` | none (binding) | Mirror a single video / community post / comment (router → handlers) |
+| `youtube-mirror-delete` | `MirrorDeleteWorkflow` | `0 * * * *` | Detect removed videos, delete their Bluesky posts |
+| `youtube-mirror-profile` | `MirrorProfileWorkflow` | `0 * * * *` | Sync channel title/description/avatar/banner → Bluesky |
+| `youtube-mirror-telemetry-gateway` | — | — | OTLP → Azure Monitor DCR forwarder (standalone; per-signal, Entra-bearer) |
 
 **Content routing**
 - **Video** → main-account post: title + `app.bsky.embed.external` link card (thumbnail → watch URL). The description becomes a **threaded self-reply chain**.
@@ -38,7 +38,7 @@ npm run cf-typegen   # regenerate worker-configuration.d.ts after editing a wran
 
 ## Data sources
 
-- **Videos + comments**: YouTube **Data API v3** (`YOUTUBE_API_KEY`). Uploads-playlist polling (`UC…`→`UU…`, 1 quota unit/call — never `search.list`, which is 100). `videos.list`, `commentThreads.list`.
+- **Videos + comments**: YouTube **Data API v3**, authenticated with a service-account OAuth token via GCP Workload Identity Federation (no static API key — see `infra/federation.md` and `worker/gcp-token.ts`). Uploads-playlist polling (`UC…`→`UU…`, 1 quota unit/call — never `search.list`, which is 100). `videos.list`, `commentThreads.list`.
 - **Community posts**: **Firecrawl** (`FIRECRAWL_API_TOKEN`) scraping `youtube.com/@handle/community` — the Data API has no community-post endpoint. Requests **raw HTML only** and parses the page's `ytInitialData` locally (avoids Firecrawl's costly LLM JSON extraction). Best-effort; never blocks video/comment mirroring.
 
 ## KV Schema
@@ -80,21 +80,21 @@ Placeholder IDs live in the `wrangler.mirror-*.jsonc` configs. To go live:
 
 1. Create a KV namespace; put its ID in every `wrangler.mirror-*.jsonc` (`kv_namespaces[0].id`).
 2. Create Secrets Store entries and set the store IDs in the configs:
-   - `youtube-mirror-youtube-api-key` (YouTube Data API v3 key)
+   - `youtube-mirror-oidc-signing-key` (RSA private key for federation; bound as `OIDC_SIGNING_KEY` in the content workers + gateway — the YouTube Data API uses GCP WIF, not an API key)
    - `youtube-mirror-firecrawl-api-token` (Firecrawl API token)
    - `youtube-mirror-atproto-password-{channelId}` and `-{channelId}-rt` (Bluesky app passwords) — append one pair per channel to each config's `secrets_store_secrets`.
-3. Provision two Bluesky accounts per channel (main + RT).
+3. Provision two Bluesky accounts per channel (main + RT), and the GCP + Azure federation resources (`infra/federation.md`).
 4. Seed a channel: `scripts/seed-channel.ts` (writes `users:{channelId}`).
 5. `npm run cf-typegen` (regenerate types), then `npm run build`, then `npm run deploy`.
-6. Telemetry (optional): fill `wrangler.mirror-telemetry-gateway.jsonc` vars with your Azure App Insights + Entra federated-credential settings; set `GATEWAY_SIGNING_KEY` and `INGEST_BEARER` as wrangler secrets; point each worker's `observability.logs/traces.destinations` at the gateway.
+6. Telemetry (optional): the gateway forwards OTLP natively to Azure Monitor's DCR ingestion endpoints (one per signal: `OTLP_{TRACES,METRICS,LOGS}_ENDPOINT`), authenticating with an Entra bearer minted via federated credentials. Fill `wrangler.mirror-telemetry-gateway.jsonc` vars with your `TENANT_ID`/`APP_CLIENT_ID`/`OIDC_ISSUER_URL` + the three DCR endpoint URLs; bind `OIDC_SIGNING_KEY` from the Secrets Store and set `INGEST_BEARER` as a wrangler secret; point each worker's `observability.logs/traces.destinations` at the gateway (it routes `POST /v1/{traces,metrics,logs}` to the matching DCR stream).
 
 ## Debugging
 
 ```bash
-npx wrangler tail mirror-channel                     # live logs
-npx wrangler tail mirror-item --status error         # errors only
+npx wrangler tail youtube-mirror-channel                     # live logs
+npx wrangler tail youtube-mirror-item --status error         # errors only
 # Workflow instances API (ACCOUNT_ID + CLOUDFLARE_API_TOKEN):
-curl -s "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workflows/mirror-item/instances?per_page=5" \
+curl -s "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workflows/youtube-mirror-item/instances?per_page=5" \
   -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | jq '.result[] | {id, status}'
 ```
 

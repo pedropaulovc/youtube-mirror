@@ -1,20 +1,32 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "mirror-telemetry-gateway",
+	"name": "youtube-mirror-telemetry-gateway",
 	"main": "worker/telemetry-gateway.ts",
 	"compatibility_date": "2025-10-08",
 	"compatibility_flags": ["nodejs_compat"],
 	"upload_source_maps": true,
-	// Placeholder values — replace with the real Azure App Insights / Entra
-	// federated-credential settings at deploy time (see AGENTS.md "Telemetry").
-	// GATEWAY_SIGNING_KEY and INGEST_BEARER are wrangler secrets, set separately.
+	// APP_CLIENT_ID is the user-assigned managed identity mi-youtube-mirror-cloudflare-wu2's
+	// clientId; TENANT_ID is the Entra tenant. INGEST_BEARER is a wrangler secret, set
+	// separately (see AGENTS.md "Telemetry"). OIDC_SIGNING_KEY is the shared RSA private
+	// key, bound from the Secrets Store below. The OTLP_*_ENDPOINT values are the live
+	// Azure Monitor DCR ingestion endpoints (a DCR immutable ID is not a credential; auth
+	// is the Entra bearer minted via the federated credential whose subject/issuer match
+	// GATEWAY_FEDERATION_SUBJECT / OIDC_ISSUER_URL below).
 	"vars": {
-		"TENANT_ID": "00000000-0000-0000-0000-000000000000",
-		"APP_CLIENT_ID": "00000000-0000-0000-0000-000000000000",
-		"OTLP_INGESTION_ENDPOINT": "https://eastus2-3.in.applicationinsights.azure.com",
-		"GATEWAY_ISSUER_URL": "https://mirror-telemetry-gateway.example.workers.dev",
-		"GATEWAY_FEDERATION_SUBJECT": "cf-worker:mirror-telemetry-gateway",
-		"GATEWAY_SIGNING_KID": "00000000",
-		"APP_INSTRUMENTATION_KEY": "00000000-0000-0000-0000-000000000000"
-	}
+		"TENANT_ID": "6f10d2eb-7cce-444c-bf11-d6fe61d7b8f8",
+		"APP_CLIENT_ID": "585e33f6-df1c-4998-bf9d-dcbe3c585d99",
+		"OTLP_TRACES_ENDPOINT": "https://managed-ai-youtube-mirror-wu2-dce-cmok.westus2-1.ingest.monitor.azure.com/dataCollectionRules/dcr-036405afd00a4f44ad0d8f4016979e92/streams/Microsoft-OTLP-Traces/otlp/v1/traces",
+		"OTLP_METRICS_ENDPOINT": "https://managed-ai-youtube-mirror-wu2-dce-cmok.westus2-1.metrics.ingest.monitor.azure.com/dataCollectionRules/dcr-036405afd00a4f44ad0d8f4016979e92/streams/Microsoft-OtelMetrics/otlp/v1/metrics",
+		"OTLP_LOGS_ENDPOINT": "https://managed-ai-youtube-mirror-wu2-dce-cmok.westus2-1.ingest.monitor.azure.com/dataCollectionRules/dcr-036405afd00a4f44ad0d8f4016979e92/streams/Microsoft-OTLP-Logs/otlp/v1/logs",
+		"OIDC_ISSUER_URL": "https://youtube-mirror-oidc-issuer.pedro-18e.workers.dev",
+		"GATEWAY_FEDERATION_SUBJECT": "cf-worker:youtube-mirror-telemetry-gateway",
+		"OIDC_SIGNING_KID": "03c90718"
+	},
+	"secrets_store_secrets": [
+		{
+			"binding": "OIDC_SIGNING_KEY",
+			"store_id": "f0c7662b60484d17a094e384a3853ab9",
+			"secret_name": "youtube-mirror-oidc-signing-key"
+		}
+	]
 }

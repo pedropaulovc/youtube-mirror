@@ -9,6 +9,7 @@ import { mirrorVideo } from "./handlers/video";
 import { mirrorCommunity } from "./handlers/community";
 import { mirrorComment } from "./handlers/comment";
 import { fetchVideos } from "./youtube-api";
+import { getYouTubeAccessToken } from "./gcp-token";
 import { fetchCommunityPosts } from "./firecrawl";
 
 // A full item + config (the channel workflow's fast path), OR a lightweight
@@ -64,8 +65,8 @@ export class MirrorItemWorkflow extends WorkflowEntrypoint<Env, MirrorItemWorkfl
 		if (!kind || !itemId) throw new NonRetryableError(`MirrorItemWorkflow payload needs an item or a {kind, itemId} reference`);
 
 		if (kind === "video") {
-			const apiKey = await this.env.YOUTUBE_API_KEY.get();
-			const [video] = await fetchVideos([itemId], apiKey);
+			const accessToken = await getYouTubeAccessToken(this.env);
+			const [video] = await fetchVideos([itemId], accessToken);
 			if (!video) throw new NonRetryableError(`Video ${itemId} not found on YouTube`);
 			return video;
 		}
