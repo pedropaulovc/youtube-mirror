@@ -39,7 +39,9 @@ secrets are the `OIDC_SIGNING_KEY` Secrets Store entry (RSA private key) and the
   `//iam.googleapis.com/projects/410438001325/locations/global/workloadIdentityPools/cloudflare-workers/providers/youtube-mirror-oidc`
 - Service account (impersonation target): `youtube-mirror-cf@youtube-mirror-501119.iam.gserviceaccount.com`
 - Binding: whole pool → `roles/iam.workloadIdentityUser` on that SA
-- Token scope requested on impersonation: `https://www.googleapis.com/auth/youtube.readonly`
+- Token scope requested on impersonation: `https://www.googleapis.com/auth/youtube.force-ssl`
+  (youtube.readonly is rejected by commentThreads/comments with 403 insufficientPermissions;
+  force-ssl is a superset that also covers playlistItems/videos reads — verified live)
 
 This **replaces the static YouTube Data API key**. The workers mint an SA access token
 (`worker/gcp-token.ts`) and call the Data API with `Authorization: Bearer`. The mirror

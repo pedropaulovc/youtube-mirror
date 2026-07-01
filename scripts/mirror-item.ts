@@ -21,7 +21,9 @@
 import process from "node:process";
 
 const ACCOUNT_ID = "REPLACE_WITH_YOUR_CLOUDFLARE_ACCOUNT_ID";
-const WORKFLOW_NAME = "mirror-item";
+// Must match the deployed workflow name in wrangler.mirror-item.jsonc, not the
+// test-config name ("mirror-item").
+const WORKFLOW_NAME = "youtube-mirror-item";
 
 const token = process.env.CLOUDFLARE_API_TOKEN;
 const [channelId, kind, itemId] = process.argv.slice(2);

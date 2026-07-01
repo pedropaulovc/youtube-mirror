@@ -25,7 +25,7 @@ describe("getYouTubeAccessToken", () => {
 	beforeEach(() => vi.resetModules()); // fresh module-level token cache per test
 	afterEach(() => vi.restoreAllMocks());
 
-	it("exchanges an assertion at STS then impersonates the SA for a youtube.readonly token", async () => {
+	it("exchanges an assertion at STS then impersonates the SA for a youtube.force-ssl token", async () => {
 		const calls: { url: string; init?: RequestInit }[] = [];
 		vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
 			calls.push({ url: String(url), init: init as RequestInit });
@@ -44,11 +44,11 @@ describe("getYouTubeAccessToken", () => {
 		expect(stsBody.get("subject_token")).toBe("header.payload.signature");
 		expect(stsBody.get("audience")).toBe(ENV.GCP_WORKLOAD_PROVIDER);
 
-		// Impersonation request: SA in the URL, federated token as Bearer, youtube.readonly scope.
+		// Impersonation request: SA in the URL, federated token as Bearer, youtube.force-ssl scope.
 		const imp = calls.find((c) => c.url.includes("generateAccessToken"))!;
 		expect(imp.url).toContain(ENV.GCP_SERVICE_ACCOUNT);
 		expect((imp.init!.headers as Record<string, string>).Authorization).toBe("Bearer federated-token");
-		expect(JSON.parse(String(imp.init!.body)).scope).toEqual(["https://www.googleapis.com/auth/youtube.readonly"]);
+		expect(JSON.parse(String(imp.init!.body)).scope).toEqual(["https://www.googleapis.com/auth/youtube.force-ssl"]);
 	});
 
 	it("caches the token across calls (no second exchange)", async () => {

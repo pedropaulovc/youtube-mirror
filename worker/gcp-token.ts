@@ -5,11 +5,16 @@ import { signAssertion } from "./oidc-sign";
 // of a static API key. Flow:
 //   1. self-sign an assertion (aud = the WIF provider resource)
 //   2. exchange it at GCP STS for a federated token
-//   3. impersonate the youtube-mirror-cf service account for a youtube.readonly token
+//   3. impersonate the youtube-mirror-cf service account for a YouTube access token
 // See infra/federation.md for the provider/SA identifiers.
+//
+// Scope note: youtube.readonly covers playlistItems/videos reads but the comment
+// endpoints (commentThreads/comments) reject it with 403 insufficientPermissions —
+// they require youtube.force-ssl, which is a superset that also covers the reads.
+// Verified empirically against the live API before deploy.
 
 const SUBJECT = "cf-worker:youtube-mirror-youtube-api";
-const YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube.readonly";
+const YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl";
 const STS_ENDPOINT = "https://sts.googleapis.com/v1/token";
 
 interface GcpTokenEnv {

@@ -93,6 +93,15 @@ export class MirrorDeleteWorkflow extends WorkflowEntrypoint<Env, MirrorDeleteWo
 					}
 				}
 				const segmentNote = uris.length > 1 ? ` (${removed}/${uris.length} chain segments)` : "";
+
+				// Only tear down the retry handle (the recent: index key) once every URI is
+				// gone. A transient PDS/network failure on any deleteRecord must fail the step
+				// so Workflows retries it — otherwise the post stays up but the index entry is
+				// removed, orphaning it permanently. deleteRecord is idempotent, so re-running
+				// over already-deleted URIs is safe.
+				if (removed < uris.length) {
+					throw new Error(`${channelId}: deleted only ${removed}/${uris.length} Bluesky posts for video ${videoId} — retrying`);
+				}
 				log({ tag: "delete-check", channelId, videoId, account: entry.account, deletedCount: removed, message: `${channelId}: deleted Bluesky post for video ${videoId}${segmentNote}` });
 
 				if (record) {

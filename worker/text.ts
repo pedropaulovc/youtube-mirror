@@ -13,9 +13,13 @@ export function truncateGraphemes(
 	const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
 	const segments = [...segmenter.segment(text)];
 	if (segments.length <= maxGraphemes) return text;
+	// Reserve one grapheme for the ellipsis so the result is at most maxGraphemes
+	// total — callers size maxGraphemes against hard caps (e.g. Bluesky's 64-grapheme
+	// displayName) and then append a suffix, so an off-by-one overflows the cap.
+	const ellipsisLen = [...segmenter.segment(ellipsis)].length;
 	return (
 		segments
-			.slice(0, maxGraphemes)
+			.slice(0, Math.max(0, maxGraphemes - ellipsisLen))
 			.map((s) => s.segment)
 			.join("") + ellipsis
 	);
