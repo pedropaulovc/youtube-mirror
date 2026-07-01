@@ -359,7 +359,10 @@ function savePasswordToSecretStore(name: string, password: string): void {
 		// bad credentials, or wrong store ID must abort — otherwise we'd write bindings and
 		// seed KV pointing at a secret that doesn't exist, and every login would fail.
 		const output = `${(err as { stdout?: string }).stdout ?? ""}${(err as { stderr?: string }).stderr ?? ""}${String(err)}`;
-		if (!/already exists|duplicate/i.test(output)) {
+		// CF returns `secret_name_already_exists` (underscores) — match that plus the
+		// human-readable "already exists" and the numeric code 1003. Anything else
+		// (transient API error, bad creds, wrong store ID) must abort.
+		if (!/already[ _]exists|duplicate|code:\s*1003/i.test(output)) {
 			throw new Error(`Failed to create secret ${name}: ${output}`);
 		}
 		log("secrets", `Secret ${name} already exists, skipping`);
