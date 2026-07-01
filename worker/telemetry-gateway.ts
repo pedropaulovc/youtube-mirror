@@ -1,0 +1,148 @@
+import { signAssertion } from "./oidc-sign";
+
+interface Env {
+  TENANT_ID: string;
+  APP_CLIENT_ID: string;
+  // Azure Monitor native OTLP/DCR ingestion endpoints (one per signal). Each is a
+  // full URL ending in /otlp/v1/{traces,metrics,logs} — see wrangler config.
+  OTLP_TRACES_ENDPOINT: string;
+  OTLP_METRICS_ENDPOINT: string;
+  OTLP_LOGS_ENDPOINT: string;
+  // Shared federation identity (see infra/federation.md). OIDC_SIGNING_KEY is a
+  // Secrets Store binding holding the RSA private key.
+  OIDC_ISSUER_URL: string;
+  OIDC_SIGNING_KID: string;
+  OIDC_SIGNING_KEY: { get(): Promise<string> };
+  GATEWAY_FEDERATION_SUBJECT: string;
+  INGEST_BEARER: string;
+}
+
+let tokenCache: { token: string; expiresAt: number } | null = null;
+
+export async function getEntraToken(env: Env): Promise<string> {
+  if (tokenCache && Date.now() < tokenCache.expiresAt) {
+    return tokenCache.token;
+  }
+
+  const assertion = await signAssertion({
+    issuer: env.OIDC_ISSUER_URL,
+    subject: env.GATEWAY_FEDERATION_SUBJECT,
+    audience: "api://AzureADTokenExchange",
+    kid: env.OIDC_SIGNING_KID,
+    privateKeyPem: await env.OIDC_SIGNING_KEY.get(),
+  });
+
+  const body = new URLSearchParams({
+    client_id: env.APP_CLIENT_ID,
+    grant_type: "client_credentials",
+    scope: "https://monitor.azure.com/.default",
+    client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+    client_assertion: assertion,
+  });
+
+  const res = await fetch(
+    `https://login.microsoftonline.com/${env.TENANT_ID}/oauth2/v2.0/token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    },
+  );
+
+  const data = (await res.json()) as {
+    access_token?: string;
+    expires_in?: number;
+    error?: string;
+    error_description?: string;
+  };
+
+  if (!data.access_token) {
+    throw new Error(
+      `Entra token exchange failed: ${data.error} — ${data.error_description}`,
+    );
+  }
+
+  tokenCache = {
+    token: data.access_token,
+    expiresAt: Date.now() + (data.expires_in! - 60) * 1000,
+  };
+
+  return tokenCache.token;
+}
+
+async function forwardOtlp(request: Request, env: Env, endpoint: string): Promise<Response> {
+  // The Cloudflare Workers OTLP exporter authenticates to us with a shared bearer
+  // (set on the observability destination). Reject anything else, but answer 200 so
+  // a misconfigured exporter doesn't retry-storm.
+  const authHeader = request.headers.get("Authorization");
+  if (authHeader !== `Bearer ${env.INGEST_BEARER}`) {
+    return new Response("OK", { status: 200 });
+  }
+
+  const rawBytes = await request.arrayBuffer();
+  if (rawBytes.byteLength === 0) {
+    return new Response("OK", { status: 200 });
+  }
+
+  // Azure Monitor's OTLP/DCR endpoint accepts identity-encoded OTLP JSON or protobuf.
+  // Decompress gzip so we can forward with an explicit Content-Type and no encoding.
+  let payload: Uint8Array;
+  const firstBytes = new Uint8Array(rawBytes.slice(0, 2));
+  if (firstBytes[0] === 0x1f && firstBytes[1] === 0x8b) {
+    const ds = new DecompressionStream("gzip");
+    const writer = ds.writable.getWriter();
+    writer.write(rawBytes);
+    writer.close();
+    payload = new Uint8Array(await new Response(ds.readable).arrayBuffer());
+  } else {
+    payload = new Uint8Array(rawBytes);
+  }
+
+  if (payload.byteLength === 0) {
+    return new Response("OK", { status: 200 });
+  }
+
+  const contentType = request.headers.get("Content-Type") || "application/json";
+  const token = await getEntraToken(env);
+
+  const upstream = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": contentType,
+      Authorization: `Bearer ${token}`,
+    },
+    body: payload,
+  });
+
+  const upstreamBody = await upstream.text();
+  if (!upstream.ok) {
+    console.log(JSON.stringify({
+      tag: "gateway-upstream-error",
+      endpoint,
+      status: upstream.status,
+      body: upstreamBody.slice(0, 500),
+    }));
+  }
+
+  return new Response(upstreamBody, {
+    status: upstream.status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export default {
+  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    // The OIDC discovery + JWKS this gateway's assertions validate against live in
+    // the standalone youtube-mirror-oidc-issuer worker (GATEWAY_ISSUER_URL).
+    if (request.method === "POST") {
+      if (path === "/v1/traces") return forwardOtlp(request, env, env.OTLP_TRACES_ENDPOINT);
+      if (path === "/v1/metrics") return forwardOtlp(request, env, env.OTLP_METRICS_ENDPOINT);
+      if (path === "/v1/logs") return forwardOtlp(request, env, env.OTLP_LOGS_ENDPOINT);
+    }
+
+    return new Response("OK", { status: 200 });
+  },
+};

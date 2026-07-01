@@ -1,28 +1,38 @@
-import react from "@vitejs/plugin-react-swc";
-import { resolve } from "path";
+import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  plugins: [react()],
-  resolve: {
-    alias: {
-      "@": resolve(__dirname, "src"),
-    },
-  },
-  test: {
-    environment: "jsdom",
-    setupFiles: ["./src/tests/setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"],
-    coverage: {
-      reporter: ["text", "json-summary", "json"],
-      include: ["src/**/*.{ts,tsx}"],
-      exclude: ["src/tests/**", "src/**/*.test.*"],
-      thresholds: {
-        lines: 70,
-        functions: 70,
-        branches: 70,
-        statements: 70,
-      },
-    },
-  },
+	plugins: [
+		cloudflareTest({
+			wrangler: { configPath: "./wrangler.test.jsonc" },
+			miniflare: {
+				serviceBindings: {
+					OIDC_SIGNING_KEY: { name: "test-secret-worker", entrypoint: "TestSecret" },
+					FIRECRAWL_API_TOKEN: { name: "test-secret-worker", entrypoint: "TestSecret" },
+				},
+				workers: [
+					{
+						name: "test-secret-worker",
+						modules: true,
+						script: `
+							import { WorkerEntrypoint } from "cloudflare:workers";
+							export class TestSecret extends WorkerEntrypoint {
+								async get() { return "test-api-token"; }
+							}
+							export default { fetch() { return new Response("ok"); } };
+						`,
+						compatibilityDate: "2025-10-08",
+						compatibilityFlags: ["nodejs_compat"],
+					},
+				],
+			},
+		}),
+	],
+	test: {
+		include: ["test/unit/**/*.test.ts", "test/integration/**/*.test.ts"],
+		exclude: ["**/node_modules/**", "**/dist/**", ".claude/**"],
+		// NOTE: v8/istanbul coverage is unsupported under @cloudflare/vitest-pool-workers
+		// (it needs node:inspector/promises, absent in the Workers runtime). We gate on
+		// `vitest run` instead. See Cloudflare vitest-integration known-issues.
+	},
 });

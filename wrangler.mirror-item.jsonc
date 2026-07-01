@@ -1,0 +1,46 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "youtube-mirror-item",
+	"main": "worker/mirror-item.ts",
+	"compatibility_date": "2025-10-08",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1
+	},
+	"workflows": [
+		{
+			"name": "youtube-mirror-item",
+			"binding": "ITEM_WORKFLOW",
+			"class_name": "MirrorItemWorkflow"
+		}
+	],
+	"upload_source_maps": true,
+	// Federation identity for YouTube Data API access via GCP Workload Identity
+	// Federation (replaces a static API key). OIDC_SIGNING_KEY is bound from the
+	// Secrets Store below. See infra/federation.md.
+	"vars": {
+		"OIDC_ISSUER_URL": "https://youtube-mirror-oidc-issuer.pedro-18e.workers.dev",
+		"OIDC_SIGNING_KID": "03c90718",
+		"GCP_WORKLOAD_PROVIDER": "//iam.googleapis.com/projects/410438001325/locations/global/workloadIdentityPools/cloudflare-workers/providers/youtube-mirror-oidc",
+		"GCP_SERVICE_ACCOUNT": "youtube-mirror-cf@youtube-mirror-501119.iam.gserviceaccount.com"
+	},
+	"kv_namespaces": [
+		{
+			"id": "4678dd1b9ac742439e0a0b029b1e9d03",
+			"binding": "KV"
+		}
+	],
+	"secrets_store_secrets": [
+		{
+			"binding": "OIDC_SIGNING_KEY",
+			"store_id": "f0c7662b60484d17a094e384a3853ab9",
+			"secret_name": "youtube-mirror-oidc-signing-key"
+		},
+		{
+			"binding": "FIRECRAWL_API_TOKEN",
+			"store_id": "f0c7662b60484d17a094e384a3853ab9",
+			"secret_name": "youtube-mirror-firecrawl-api-token"
+		}
+	]
+}

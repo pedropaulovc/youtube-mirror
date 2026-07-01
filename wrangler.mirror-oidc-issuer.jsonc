@@ -1,0 +1,15 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "youtube-mirror-oidc-issuer",
+	"main": "worker/oidc-issuer.ts",
+	"compatibility_date": "2025-10-08",
+	"compatibility_flags": ["nodejs_compat"],
+	"upload_source_maps": true,
+	// Public OIDC issuer. ISSUER_URL must equal this worker's own public URL and
+	// match: every minting worker's OIDC_ISSUER_URL, the Azure federated-credential
+	// issuer, and the GCP workload-identity-pool provider issuer-uri. The kid in the
+	// embedded JWK (worker/oidc-issuer.ts) must match OIDC_SIGNING_KID on the minting workers.
+	"vars": {
+		"ISSUER_URL": "https://youtube-mirror-oidc-issuer.pedro-18e.workers.dev"
+	}
+}
