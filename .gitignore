@@ -43,3 +43,8 @@ coverage/
 # Build / wrangler output
 dist/
 .wrangler/
+
+# Provisioning state (holds account passwords + PLC rotation keys — never commit)
+scripts/.provision-*.json
+scripts/.deprovision-cache/
+scripts/.tmp-kv-*.json
