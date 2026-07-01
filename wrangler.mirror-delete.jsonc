@@ -1,0 +1,40 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "mirror-delete",
+	"main": "worker/mirror-delete.ts",
+	"compatibility_date": "2025-10-08",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1
+	},
+	"workflows": [
+		{
+			"name": "mirror-delete",
+			"binding": "DELETE_CHECK_WORKFLOW",
+			"class_name": "MirrorDeleteWorkflow"
+		}
+	],
+	"triggers": {
+		"crons": ["0 * * * *"]
+	},
+	"upload_source_maps": true,
+	"kv_namespaces": [
+		{
+			"id": "0000000000000000000000000000youtube",
+			"binding": "KV"
+		}
+	],
+	"secrets_store_secrets": [
+		{
+			"binding": "YOUTUBE_API_KEY",
+			"store_id": "00000000000000000000000000000000",
+			"secret_name": "youtube-mirror-youtube-api-key"
+		},
+		{
+			"binding": "FIRECRAWL_API_TOKEN",
+			"store_id": "00000000000000000000000000000000",
+			"secret_name": "youtube-mirror-firecrawl-api-token"
+		}
+	]
+}

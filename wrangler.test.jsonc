@@ -1,0 +1,37 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "youtube-mirror-test",
+	"main": "worker/test-entry.ts",
+	"compatibility_date": "2025-10-08",
+	"compatibility_flags": ["nodejs_compat"],
+	"workflows": [
+		{
+			"name": "mirror-channel",
+			"binding": "CHANNEL_WORKFLOW",
+			"class_name": "MirrorChannelWorkflow"
+		},
+		{
+			"name": "mirror-item",
+			"binding": "ITEM_WORKFLOW",
+			"class_name": "MirrorItemWorkflow"
+		},
+		{
+			"name": "mirror-delete",
+			"binding": "DELETE_CHECK_WORKFLOW",
+			"class_name": "MirrorDeleteWorkflow"
+		},
+		{
+			"name": "mirror-profile",
+			"binding": "PROFILE_SYNC_WORKFLOW",
+			"class_name": "MirrorProfileWorkflow"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"id": "test-kv",
+			"binding": "KV"
+		}
+	]
+	// No secrets_store_secrets — YOUTUBE_API_KEY / FIRECRAWL_API_TOKEN are provided
+	// via miniflare serviceBindings in vitest.config.ts.
+}

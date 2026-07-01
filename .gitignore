@@ -39,3 +39,7 @@ coverage/
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Build / wrangler output
+dist/
+.wrangler/

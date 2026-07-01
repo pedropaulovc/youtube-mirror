@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   lint:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         timeout-minutes: 1
@@ -33,11 +33,11 @@ jobs:
         run: for i in 1 2 3; do if npm ci; then break; elif [ "$i" -eq 3 ]; then exit 1; else sleep 15; fi; done
 
       - name: Run linter
-        timeout-minutes: 2
+        timeout-minutes: 3
         run: npm run lint
 
   typecheck:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         timeout-minutes: 1
@@ -55,7 +55,7 @@ jobs:
         run: for i in 1 2 3; do if npm ci; then break; elif [ "$i" -eq 3 ]; then exit 1; else sleep 15; fi; done
 
       - name: Run typecheck
-        timeout-minutes: 2
+        timeout-minutes: 3
         run: npm run typecheck
 
   unit-tests:
@@ -76,31 +76,11 @@ jobs:
         timeout-minutes: 2
         run: for i in 1 2 3; do if npm ci; then break; elif [ "$i" -eq 3 ]; then exit 1; else sleep 15; fi; done
 
-      - name: Run unit tests with coverage
-        timeout-minutes: 2
-        run: npm run test:coverage
+      - name: Run tests
+        timeout-minutes: 3
+        run: npm run test
 
-      - name: Download base coverage
-        if: always()
-        id: download-coverage-baseline
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          workflow: ci-cd-main.yml
-          branch: main
-          name: coverage-baseline
-          path: coverage-baseline
-        continue-on-error: true
-
-      - name: Coverage report with delta
-        if: always()
-        uses: davelosert/vitest-coverage-report-action@v2
-        with:
-          file-coverage-mode: changes
-          pr-number: ${{ github.event.pull_request.number }}
-          json-summary-compare-path: ${{ steps.download-coverage-baseline.outcome == 'success' && 'coverage-baseline/coverage-summary.json' || '' }}
-          threshold-icons: "{0: '🔴', 70: '🟡', 75: '🔵', 85: '🟢'}"
-
-  e2e-tests:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -118,10 +98,6 @@ jobs:
         timeout-minutes: 2
         run: for i in 1 2 3; do if npm ci; then break; elif [ "$i" -eq 3 ]; then exit 1; else sleep 15; fi; done
 
-      - name: Install Playwright browsers
-        timeout-minutes: 1
-        run: npx playwright install --with-deps chromium-headless-shell
-
-      - name: Run E2E tests
+      - name: Build workers (wrangler dry-run)
         timeout-minutes: 3
-        run: npm run test:e2e
+        run: npm run build

@@ -1,0 +1,20 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "mirror-telemetry-gateway",
+	"main": "worker/telemetry-gateway.ts",
+	"compatibility_date": "2025-10-08",
+	"compatibility_flags": ["nodejs_compat"],
+	"upload_source_maps": true,
+	// Placeholder values — replace with the real Azure App Insights / Entra
+	// federated-credential settings at deploy time (see AGENTS.md "Telemetry").
+	// GATEWAY_SIGNING_KEY and INGEST_BEARER are wrangler secrets, set separately.
+	"vars": {
+		"TENANT_ID": "00000000-0000-0000-0000-000000000000",
+		"APP_CLIENT_ID": "00000000-0000-0000-0000-000000000000",
+		"OTLP_INGESTION_ENDPOINT": "https://eastus2-3.in.applicationinsights.azure.com",
+		"GATEWAY_ISSUER_URL": "https://mirror-telemetry-gateway.example.workers.dev",
+		"GATEWAY_FEDERATION_SUBJECT": "cf-worker:mirror-telemetry-gateway",
+		"GATEWAY_SIGNING_KID": "00000000",
+		"APP_INSTRUMENTATION_KEY": "00000000-0000-0000-0000-000000000000"
+	}
+}
