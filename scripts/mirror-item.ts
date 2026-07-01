@@ -19,6 +19,11 @@
  *   # poll to re-mirror them; a manual comment trigger is rejected by the workflow.
  */
 import process from "node:process";
+import { ensureOpEnv } from "./op-bootstrap.js";
+
+// Self-source CLOUDFLARE_API_TOKEN from the 1Password environment (re-execs under
+// `op run` if it isn't already in the env), so this runs standalone.
+ensureOpEnv(["CLOUDFLARE_API_TOKEN"]);
 
 const ACCOUNT_ID = "REPLACE_WITH_YOUR_CLOUDFLARE_ACCOUNT_ID";
 // Must match the deployed workflow name in wrangler.mirror-item.jsonc, not the

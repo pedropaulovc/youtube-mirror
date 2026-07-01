@@ -10,6 +10,7 @@
  */
 import { execSync } from "node:child_process";
 import process from "node:process";
+import { ensureOpEnv } from "./op-bootstrap.js";
 
 // Minimal inline copy of worker/types.ts (kept standalone — no worker/ import).
 interface BlueskyAccountConfig {
@@ -29,6 +30,10 @@ interface ChannelConfig {
 
 const args = process.argv.slice(2);
 const commit = args.includes("--commit");
+// Only the --commit path calls wrangler against production; self-source the CF token
+// from the 1Password environment then (re-execs under `op run` if it isn't set). The
+// dry preview needs no credentials.
+if (commit) ensureOpEnv(["CLOUDFLARE_API_TOKEN"]);
 const envIdx = args.indexOf("--env");
 if (envIdx !== -1) args.splice(envIdx, 2); // --env <name> (unused for now)
 const positional = args.filter((a) => !a.startsWith("--"));

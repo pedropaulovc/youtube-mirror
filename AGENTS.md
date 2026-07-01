@@ -74,6 +74,25 @@ npm run cf-typegen   # regenerate worker-configuration.d.ts after editing a wran
 - Each integration test file must `vi.mock("@atproto/api", ...)` at the top: the worker's main module imports `@atproto/api`, which crashes on import in the Workers test runtime.
 - **Prove tests fail first** (TDD or temporarily break the code) — a test that never failed is untrustworthy.
 
+## Local credentials (`op`)
+
+Scripts that touch production (`provision-account`, `deprovision-account`, `seed-channel`,
+`mirror-item`) read `CLOUDFLARE_API_TOKEN` / `FIRECRAWL_API_TOKEN` from the 1Password
+environment `bykx5xzmykwxw3of4gtncs7i7i`. They call `ensureOpEnv(...)` (`scripts/op-bootstrap.ts`),
+which **auto-sources `.env.local`** for `OP_SERVICE_ACCOUNT_TOKEN` and then re-execs the
+script under `op run --environment …` — so you don't prefix commands with `op run` yourself.
+
+Requirement: create a gitignored **`.env.local`** at the repo root holding the service-account
+token that can read that environment:
+
+```
+OP_SERVICE_ACCOUNT_TOKEN=ops_…
+```
+
+`.env.local` wins over any ambient `OP_SERVICE_ACCOUNT_TOKEN` (a stray shell value points at
+the wrong account and makes every `op` call fail with "An unexpected error occurred"). When
+`.env.local` is absent (e.g. CI injecting the token as a secret), the ambient env is used as-is.
+
 ## Deployment (requires your credentials — not wired in this repo)
 
 Placeholder IDs live in the `wrangler.mirror-*.jsonc` configs. To go live:
