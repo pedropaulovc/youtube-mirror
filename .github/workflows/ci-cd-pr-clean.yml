@@ -1,0 +1,19 @@
+name: PR Cleanup
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR cleanup placeholder
+        run: echo "PR #${{ github.event.pull_request.number }} closed. Add cleanup steps here (preview deployments, ephemeral environments, etc.)"

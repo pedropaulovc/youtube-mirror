@@ -1,0 +1,47 @@
+#!/bin/bash
+# Pre-push hook: Block worktree branch pushes, check rebase conflicts
+
+# Block pushes of worktree branches (A, B, C, D, E, F, G)
+while read local_ref local_sha remote_ref remote_sha; do
+  branch="${remote_ref#refs/heads/}"
+  if [[ "$branch" =~ ^[A-G]$ ]]; then
+    echo "ERROR: Pushing worktree branch '$branch' is not allowed."
+    echo ""
+    echo "Create a feature branch instead:"
+    echo "  git checkout -b feature/your-feature-name"
+    echo ""
+    exit 1
+  fi
+done
+
+# Skip remaining checks if not pushing to origin
+remote="$1"
+if [[ "$remote" != "origin" ]]; then
+    exit 0
+fi
+
+# Fetch latest main silently
+git fetch origin main 2>/dev/null || exit 0
+
+# Check if current HEAD contains origin/main (already up to date)
+if ! git merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
+    # Branch is behind - test if rebase would have conflicts
+    echo "Checking for rebase conflicts with origin/main..."
+
+    conflict_check=$(git merge-tree --write-tree origin/main HEAD 2>&1)
+
+    if [[ $? -ne 0 ]] || echo "$conflict_check" | grep -q "CONFLICT"; then
+        echo ""
+        echo "ERROR: Your branch has CONFLICTS with origin/main."
+        echo ""
+        echo "Conflicting files:"
+        echo "$conflict_check" | grep "CONFLICT" | sed 's/CONFLICT ([^)]*): /  /'
+        echo ""
+        echo "Run: git rebase origin/main"
+        echo "Then resolve conflicts and continue."
+        echo ""
+        exit 1
+    else
+        echo "OK: Behind origin/main but no conflicts."
+    fi
+fi

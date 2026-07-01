@@ -1,0 +1,127 @@
+name: CI/CD Pull Request
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout repository
+        timeout-minutes: 1
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        timeout-minutes: 1
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        timeout-minutes: 2
+        run: for i in 1 2 3; do if npm ci; then break; elif [ "$i" -eq 3 ]; then exit 1; else sleep 15; fi; done
+
+      - name: Run linter
+        timeout-minutes: 2
+        run: npm run lint
+
+  typecheck:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout repository
+        timeout-minutes: 1
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        timeout-minutes: 1
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        timeout-minutes: 2
+        run: for i in 1 2 3; do if npm ci; then break; elif [ "$i" -eq 3 ]; then exit 1; else sleep 15; fi; done
+
+      - name: Run typecheck
+        timeout-minutes: 2
+        run: npm run typecheck
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        timeout-minutes: 1
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        timeout-minutes: 1
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        timeout-minutes: 2
+        run: for i in 1 2 3; do if npm ci; then break; elif [ "$i" -eq 3 ]; then exit 1; else sleep 15; fi; done
+
+      - name: Run unit tests with coverage
+        timeout-minutes: 2
+        run: npm run test:coverage
+
+      - name: Download base coverage
+        if: always()
+        id: download-coverage-baseline
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: ci-cd-main.yml
+          branch: main
+          name: coverage-baseline
+          path: coverage-baseline
+        continue-on-error: true
+
+      - name: Coverage report with delta
+        if: always()
+        uses: davelosert/vitest-coverage-report-action@v2
+        with:
+          file-coverage-mode: changes
+          pr-number: ${{ github.event.pull_request.number }}
+          json-summary-compare-path: ${{ steps.download-coverage-baseline.outcome == 'success' && 'coverage-baseline/coverage-summary.json' || '' }}
+          threshold-icons: "{0: '🔴', 70: '🟡', 75: '🔵', 85: '🟢'}"
+
+  e2e-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        timeout-minutes: 1
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        timeout-minutes: 1
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        timeout-minutes: 2
+        run: for i in 1 2 3; do if npm ci; then break; elif [ "$i" -eq 3 ]; then exit 1; else sleep 15; fi; done
+
+      - name: Install Playwright browsers
+        timeout-minutes: 1
+        run: npx playwright install --with-deps chromium-headless-shell
+
+      - name: Run E2E tests
+        timeout-minutes: 3
+        run: npm run test:e2e

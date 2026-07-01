@@ -1,0 +1,14 @@
+name: Human review gate
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  gate:
+    name: Awaiting human review
+    runs-on: ubuntu-slim
+    environment: pr-review-gate
+    steps:
+      - run: echo "Human approver acknowledged this PR's diff."

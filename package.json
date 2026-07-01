@@ -1,0 +1,57 @@
+{
+  "name": "typescript-project",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint . --fix --quiet --max-warnings 0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest --reporter=dot",
+    "test:watch": "vitest --watch --reporter=dot",
+    "test:coverage": "vitest --coverage --reporter=dot",
+    "test:e2e": "playwright test --reporter=dot",
+    "test:all": "npm run lint -s && npm run typecheck -s && npm run test -s -- --coverage && npm run test:e2e -s",
+    "prepare": "node -e \"process.env.MSYS_NO_PATHCONV='1';import('husky').then(m=>process.stdout.write(m.default()))\" --input-type=module"
+  },
+  "dependencies": {
+    "next": "16.1.6",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.60.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react-swc": "^4.2.3",
+    "@vitest/coverage-v8": "^4.0.18",
+    "cross-env": "^10.1.0",
+    "eslint": "^9.32.0",
+    "eslint-config-next": "16.1.6",
+    "eslint-plugin-playwright": "^2.9.0",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "husky": "^9.1.7",
+    "jsdom": "^28.1.0",
+    "playwright": "^1.60.0",
+    "playwright-core": "^1.60.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.57.1",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=24",
+    "npm": ">=11"
+  },
+  "overrides": {
+    "@playwright/test": "^1.60.0",
+    "playwright": "^1.60.0",
+    "playwright-core": "^1.60.0"
+  }
+}
