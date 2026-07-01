@@ -5,6 +5,8 @@ interface __BaseEnv_Env {
 	KV: KVNamespace;
 	OIDC_SIGNING_KEY: SecretsStoreSecret;
 	FIRECRAWL_API_TOKEN: SecretsStoreSecret;
+	"youtube-mirror-atproto-password-UC5NO8MgTQKHAWXp6z8Xl7yQ": SecretsStoreSecret;
+	"youtube-mirror-atproto-password-UC5NO8MgTQKHAWXp6z8Xl7yQ-rt": SecretsStoreSecret;
 	OIDC_ISSUER_URL: "https://youtube-mirror-oidc-issuer.pedro-18e.workers.dev";
 	OIDC_SIGNING_KID: "03c90718";
 	GCP_WORKLOAD_PROVIDER: "//iam.googleapis.com/projects/410438001325/locations/global/workloadIdentityPools/cloudflare-workers/providers/youtube-mirror-oidc";
