@@ -30,7 +30,7 @@ describe("BlueskyClient.createPost", () => {
 	});
 
 	it("attaches an external link card when given an external embed", async () => {
-		const client = new BlueskyClient("testchannel.selfhosted.social", "pw");
+		const client = new BlueskyClient("testchannel.selfhosted.social", "pw", "https://selfhosted.social");
 		await client.createPost("My video", new Date("2026-06-01T00:00:00Z"), {
 			external: { uri: "https://www.youtube.com/watch?v=x", title: "My video", description: "desc" },
 		});
@@ -40,7 +40,7 @@ describe("BlueskyClient.createPost", () => {
 	});
 
 	it("prefers an images embed over an external card", async () => {
-		const client = new BlueskyClient("testchannel.selfhosted.social", "pw");
+		const client = new BlueskyClient("testchannel.selfhosted.social", "pw", "https://selfhosted.social");
 		await client.createPost("post", new Date(), {
 			images: [{ blob: { $type: "blob" } as never }],
 			external: { uri: "https://x", title: "t", description: "d" },
@@ -50,7 +50,7 @@ describe("BlueskyClient.createPost", () => {
 	});
 
 	it("threads a reply with parent and root refs", async () => {
-		const client = new BlueskyClient("testchannel.selfhosted.social", "pw");
+		const client = new BlueskyClient("testchannel.selfhosted.social", "pw", "https://selfhosted.social");
 		await client.createPost("reply", new Date(), {
 			replyToUri: "at://parent",
 			replyToCid: "cidParent",
@@ -63,7 +63,7 @@ describe("BlueskyClient.createPost", () => {
 	});
 
 	it("defaults the reply root to the parent when no root is given", async () => {
-		const client = new BlueskyClient("testchannel.selfhosted.social", "pw");
+		const client = new BlueskyClient("testchannel.selfhosted.social", "pw", "https://selfhosted.social");
 		await client.createPost("reply", new Date(), { replyToUri: "at://p", replyToCid: "c" });
 		const reply = lastPostRecord?.reply as { root: { uri: string } };
 		expect(reply.root.uri).toBe("at://p");

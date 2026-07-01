@@ -118,14 +118,19 @@ export async function fetchCommunityPosts(
 			headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
 			body: JSON.stringify({
 				url,
-				formats: ["json"],
+				// Firecrawl v2 nests JSON-extraction options inside the format entry
+				// (`{ type: "json", schema, prompt }`); the older top-level `jsonOptions`
+				// shape is rejected by /v2/scrape, which silently disables community mirroring.
+				formats: [
+					{
+						type: "json",
+						schema: COMMUNITY_SCHEMA,
+						prompt: "Extract every community-tab post with its ID, text, images, poll, and relative publish time.",
+					},
+				],
 				onlyMainContent: false,
 				waitFor: 8000,
 				proxy: "stealth",
-				jsonOptions: {
-					schema: COMMUNITY_SCHEMA,
-					prompt: "Extract every community-tab post with its ID, text, images, poll, and relative publish time.",
-				},
 			}),
 		});
 	} catch (err) {

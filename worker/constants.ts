@@ -37,6 +37,20 @@ export const BIO_DISCLAIMER =
 export const BLUESKY_LABELER_DID = "did:plc:ar7c4by46qjdydhdevvrndac";
 export const BLUESKY_PUBLIC_API = "https://public.api.bsky.app";
 
+// Default PDS / entryway used when a handle's DID document can't be resolved to a
+// concrete PDS service endpoint. bsky.social hosts the majority of accounts.
+export const DEFAULT_PDS_URL = "https://bsky.social";
+// PLC directory for resolving did:plc DID documents → PDS service endpoint.
+export const PLC_DIRECTORY_URL = "https://plc.directory";
+// Cache TTL for a resolved account→PDS mapping (KV `pds:{account}`). PDS moves are
+// rare, so a long TTL keeps the two extra resolution round-trips off the hot path.
+export const PDS_CACHE_TTL = 86400; // 24h
+
+// Chain-progress marker (chain-progress:{channelId}:{itemId}) TTL. Records how far a
+// multi-post reply chain got so a step retry resumes instead of re-posting the root.
+// Deleted on success; the TTL only reaps markers orphaned by a permanently-failed item.
+export const CHAIN_PROGRESS_TTL = 86400; // 24h
+
 // Delete workflow
 export const CHECK_WINDOW_HOURS = 24;
 

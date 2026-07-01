@@ -1,7 +1,10 @@
 /**
- * Manually re-mirror a single YouTube item (video / community post / comment)
- * by triggering one MirrorItemWorkflow instance via the Cloudflare Workflows
- * REST API. For manual ops / debugging only.
+ * Manually re-mirror a single YouTube item by triggering one MirrorItemWorkflow
+ * instance via the Cloudflare Workflows REST API. For manual ops / debugging only.
+ *
+ * The workflow hydrates the item from this `{channelId, kind, itemId}` reference
+ * (it reads the ChannelConfig from KV and re-fetches the item from YouTube/Firecrawl),
+ * so the payload below is exactly what it expects.
  *
  * Requirements:
  *   - CLOUDFLARE_API_TOKEN env var (Workflows edit permission).
@@ -11,7 +14,9 @@
  *
  * Usage:
  *   CLOUDFLARE_API_TOKEN=... npx tsx scripts/mirror-item.ts <channelId> <kind> <itemId>
- *   # kind ∈ { video | community | comment }
+ *   # kind ∈ { video | community }
+ *   # comments carry parent/video context only the poller has — re-run the channel
+ *   # poll to re-mirror them; a manual comment trigger is rejected by the workflow.
  */
 import process from "node:process";
 

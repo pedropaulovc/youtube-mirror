@@ -207,35 +207,87 @@ export async function fetchComments(
 	const afterMs = after ? new Date(after).getTime() : -Infinity;
 	const out: CommentItem[] = [];
 
-	let data: CommentThreadsResponse;
-	try {
-		data = await ytFetch<CommentThreadsResponse>(
-			"commentThreads",
-			{ part: "snippet,replies", videoId, order: "time", maxResults: String(Math.min(100, maxThreads)) },
-			apiKey,
-		);
-	} catch (err) {
-		// Comments disabled on a video → 403. Non-fatal; skip this video.
-		warn({ tag: "yt-comments", videoId, message: `commentThreads fetch failed for ${videoId}`, error: String(err) });
-		return [];
-	}
+	// Page through comment threads (newest first). Without this, a burst of >100 new
+	// threads between polls would be truncated to the first page and the cursor would
+	// advance past the older still-new threads on later pages, dropping them forever.
+	const maxPages = Math.max(1, Math.ceil(maxThreads / 100));
+	let pageToken: string | undefined;
+	let threadCount = 0;
+	for (let page = 0; page < maxPages && threadCount < maxThreads; page++) {
+		const params: { [key: string]: string } = {
+			part: "snippet,replies",
+			videoId,
+			order: "time",
+			textFormat: "plainText", // else textDisplay carries HTML markup/entities
+			maxResults: String(Math.min(100, maxThreads - threadCount)),
+		};
+		if (pageToken) params.pageToken = pageToken;
 
-	for (const thread of data.items ?? []) {
-		const top = thread.snippet?.topLevelComment;
-		if (!top) continue;
-		const topItem = normalizeComment(top, channelId, videoId, videoId, "video");
-		if (new Date(topItem.publishedAt).getTime() > afterMs) out.push(topItem);
-
-		// Inline replies (API returns up to 5). Deeper reply counts are left for a
-		// future comments.list follow-up; the top-level thread is the common case.
-		for (const reply of thread.replies?.comments ?? []) {
-			const replyItem = normalizeComment(reply, channelId, videoId, topItem.id, "comment");
-			if (new Date(replyItem.publishedAt).getTime() > afterMs) out.push(replyItem);
+		let data: CommentThreadsResponse;
+		try {
+			data = await ytFetch<CommentThreadsResponse>("commentThreads", params, apiKey);
+		} catch (err) {
+			// Comments disabled on a video → 403. Non-fatal; skip this video.
+			warn({ tag: "yt-comments", videoId, message: `commentThreads fetch failed for ${videoId}`, error: String(err) });
+			break;
 		}
+
+		let newestInPage = -Infinity;
+		for (const thread of data.items ?? []) {
+			threadCount++;
+			const top = thread.snippet?.topLevelComment;
+			if (!top) continue;
+			const topItem = normalizeComment(top, channelId, videoId, videoId, "video");
+			const topMs = new Date(topItem.publishedAt).getTime();
+			newestInPage = Math.max(newestInPage, topMs);
+			if (topMs > afterMs) out.push(topItem);
+
+			await appendThreadReplies(out, thread, topItem.id, channelId, videoId, apiKey, afterMs);
+		}
+
+		// Threads are newest-first: once an entire page predates the cursor, every
+		// later page does too, so stop paging.
+		if (!data.nextPageToken || newestInPage <= afterMs) break;
+		pageToken = data.nextPageToken;
 	}
 
 	// Oldest-first so parents precede replies when dispatched.
 	return out.sort((a, b) => new Date(a.publishedAt).getTime() - new Date(b.publishedAt).getTime());
+}
+
+/**
+ * Append a thread's replies to `out`. `commentThreads.list` inlines only a subset
+ * of replies; when a thread has more than the inline set, fall back to the paginated
+ * `comments.list` so no still-new reply is silently dropped.
+ */
+async function appendThreadReplies(
+	out: CommentItem[],
+	thread: NonNullable<CommentThreadsResponse["items"]>[number],
+	topCommentId: string,
+	channelId: string,
+	videoId: string,
+	apiKey: string,
+	afterMs: number,
+): Promise<void> {
+	const inline = thread.replies?.comments ?? [];
+	const total = thread.snippet?.totalReplyCount ?? inline.length;
+
+	if (total > inline.length) {
+		try {
+			const afterIso = Number.isFinite(afterMs) ? new Date(afterMs).toISOString() : undefined;
+			const replies = await fetchCommentReplies(topCommentId, channelId, videoId, apiKey, afterIso);
+			out.push(...replies);
+			return;
+		} catch (err) {
+			// Fall back to the inline subset if the replies fetch fails.
+			warn({ tag: "yt-comments", videoId, message: `comments.list fetch failed for ${topCommentId}`, error: String(err) });
+		}
+	}
+
+	for (const reply of inline) {
+		const replyItem = normalizeComment(reply, channelId, videoId, topCommentId, "comment");
+		if (new Date(replyItem.publishedAt).getTime() > afterMs) out.push(replyItem);
+	}
 }
 
 export function normalizeComment(
@@ -305,7 +357,7 @@ export async function fetchCommentReplies(
 	const out: CommentItem[] = [];
 	let pageToken: string | undefined;
 	do {
-		const params: { [key: string]: string } = { part: "snippet", parentId: parentCommentId, maxResults: "100" };
+		const params: { [key: string]: string } = { part: "snippet", parentId: parentCommentId, maxResults: "100", textFormat: "plainText" };
 		if (pageToken) params.pageToken = pageToken;
 		const data = await ytFetch<CommentsListResponse>("comments", params, apiKey);
 		for (const c of data.items ?? []) {

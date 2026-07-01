@@ -88,17 +88,20 @@ export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannel
 		return out;
 	}
 
+	/** Returns true iff the item workflow was successfully created/queued. */
 	private async dispatchItem(
 		channelId: string,
 		channelConfig: ChannelConfig,
 		item: ContentItem,
 		parentWorkflowId: string,
-	): Promise<void> {
+	): Promise<boolean> {
 		const id = itemWorkflowId(channelId, item.kind, item.id);
 		try {
 			await createWorkflowWithRetry(this.env.ITEM_WORKFLOW, id, { item, channelId, channelConfig, parentWorkflowId });
+			return true;
 		} catch (err) {
 			warn({ tag: "dispatch", channelId, kind: item.kind, itemId: item.id, message: `${channelId}: failed to dispatch ${item.kind} ${item.id}`, error: String(err) });
+			return false;
 		}
 	}
 
@@ -128,18 +131,23 @@ export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannel
 
 			if (newComments.length === 0) continue;
 
+			// newComments is oldest-first. Advance the cursor only across the leading
+			// run of comments that dispatched successfully: the first failed dispatch
+			// caps the cursor so that comment (and everything after it) is refetched
+			// next poll instead of being silently skipped.
+			let cursorAdvance: string | undefined;
 			for (const comment of newComments) {
-				await this.dispatchItem(channelId, channelConfig, comment, workflowId);
+				const ok = await this.dispatchItem(channelId, channelConfig, comment, workflowId);
+				if (!ok) break;
+				cursorAdvance = comment.publishedAt;
 			}
 
-			// Advance the cursor to the newest comment we saw this cycle.
-			const newest = newComments.reduce(
-				(max, c) => (new Date(c.publishedAt).getTime() > new Date(max).getTime() ? c.publishedAt : max),
-				newComments[0].publishedAt,
-			);
-			await stepDo<void>(step, `advance-comment-cursor-${video.id}`, async () => {
-				await this.env.KV.put(`comment-cursor:${channelId}:${video.id}`, newest);
-			});
+			if (cursorAdvance) {
+				const newest = cursorAdvance;
+				await stepDo<void>(step, `advance-comment-cursor-${video.id}`, async () => {
+					await this.env.KV.put(`comment-cursor:${channelId}:${video.id}`, newest);
+				});
+			}
 		}
 	}
 }

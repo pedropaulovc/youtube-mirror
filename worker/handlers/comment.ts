@@ -1,8 +1,13 @@
 import type { AppBskyRichtextFacet } from "@atproto/api";
 import { splitIntoChunks } from "../content";
 import type { CommentItem } from "../types";
-import { warn } from "../log";
 import type { MirrorContext } from "./context";
+
+// A comment can be dispatched before its parent (a nested reply racing the parent
+// comment's own workflow). Retry the step until the parent's mirrored post exists,
+// rather than completing without a record — a deterministic-id instance never re-runs,
+// and the poll cursor advances past it, so completing here would drop the comment.
+const PARENT_WAIT_CONFIG = { retries: { limit: 10, delay: "30 seconds", backoff: "exponential" } } as const;
 
 /**
  * Build a link facet over the `@author` label prefix, pointing at the
@@ -25,25 +30,6 @@ export async function mirrorComment(comment: CommentItem, ctx: MirrorContext): P
 	const existing = await ctx.getMirrored(ctx.channelId, comment.id);
 	if (existing) return;
 
-	// The comment threads under its parent's Bluesky post.
-	const parent = await ctx.getMirrored(ctx.channelId, comment.parentItemId);
-	if (!parent) {
-		warn({ tag: "comment", channelId: ctx.channelId, commentId: comment.id, parentItemId: comment.parentItemId, message: `${ctx.channelId}: parent ${comment.parentItemId} not mirrored yet, deferring comment ${comment.id}` });
-		return;
-	}
-
-	// Root is the video's post (top-level of the thread). For a top-level comment
-	// the parent already IS the video post; for a nested reply resolve the video.
-	let rootUri = parent.bskyUri;
-	let rootCid = parent.bskyCid;
-	if (comment.parentItemKind === "comment" && comment.videoId) {
-		const videoRec = await ctx.getMirrored(ctx.channelId, comment.videoId);
-		if (videoRec) {
-			rootUri = videoRec.bskyUri;
-			rootCid = videoRec.bskyCid;
-		}
-	}
-
 	const account: "main" | "rt" = comment.isChannelOwner ? "main" : "rt";
 
 	let firstChunkFacets: AppBskyRichtextFacet.Main[] | undefined;
@@ -61,7 +47,26 @@ export async function mirrorComment(comment: CommentItem, ctx: MirrorContext): P
 
 	const chunks = splitIntoChunks(text);
 
-	await ctx.step.do(`post-comment-${comment.id}`, async () => {
+	await ctx.step.do(`post-comment-${comment.id}`, PARENT_WAIT_CONFIG, async () => {
+		// Resolve the parent inside the step so retries re-check for a parent that
+		// hasn't been mirrored yet. Missing parent → throw → the step retries.
+		const parent = await ctx.getMirrored(ctx.channelId, comment.parentItemId);
+		if (!parent) {
+			throw new Error(`${ctx.channelId}: parent ${comment.parentItemId} not mirrored yet, retrying comment ${comment.id}`);
+		}
+
+		// Root is the video's post (top-level of the thread). For a top-level comment
+		// the parent already IS the video post; for a nested reply resolve the video.
+		let rootUri = parent.bskyUri;
+		let rootCid = parent.bskyCid;
+		if (comment.parentItemKind === "comment" && comment.videoId) {
+			const videoRec = await ctx.getMirrored(ctx.channelId, comment.videoId);
+			if (videoRec) {
+				rootUri = videoRec.bskyUri;
+				rootCid = videoRec.bskyCid;
+			}
+		}
+
 		const client = await ctx.getClient(ctx.channelConfig, account);
 		const result = await ctx.postChain(
 			client,

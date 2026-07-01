@@ -5,7 +5,7 @@ import { getAuthenticatedClient } from "./bluesky";
 import type { BlueskyClient } from "./bluesky";
 import { stepDo } from "./step";
 import type { ChannelConfig, MirroredRecord, RecentIndexEntry } from "./types";
-import { log, warn, error, verbose, setWorkflowContext, Logger } from "./log";
+import { log, error, verbose, setWorkflowContext, Logger } from "./log";
 import { normalizeChannelId } from "./handles";
 
 export interface MirrorDeleteWorkflowParams {
@@ -55,18 +55,15 @@ export class MirrorDeleteWorkflow extends WorkflowEntrypoint<Env, MirrorDeleteWo
 		const apiKey = await this.env.YOUTUBE_API_KEY.get();
 		const videoIds = entries.map((e) => e.itemId);
 
+		// `checkVideosExist` throws (via ytFetch) on any non-OK API response, so a
+		// successful call that returns an empty set genuinely means every checked
+		// video is gone — common when a single recent upload is later deleted. Don't
+		// guard on size === 0: that would strand the cleanup exactly when it's needed.
 		const existing = await stepDo<string[]>(step, `check-existence-${channelId}`, async () => {
 			const alive = await checkVideosExist(videoIds, apiKey);
 			return [...alive];
 		});
 		const existingIds: Set<string> = new Set(existing);
-
-		// Safety: an empty result likely means the API call failed silently — abort
-		// rather than treating every video as deleted.
-		if (existingIds.size === 0) {
-			warn({ tag: "delete-check", channelId, checkedCount: videoIds.length, message: `${channelId}: existence check returned 0 of ${videoIds.length} — aborting to avoid false deletions` });
-			return;
-		}
 
 		const deleted = videoIds.filter((id) => !existingIds.has(id));
 		if (deleted.length === 0) {

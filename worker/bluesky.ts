@@ -3,7 +3,7 @@ import type { AppBskyRichtextFacet, BlobRef } from "@atproto/api";
 import { NonRetryableError } from "cloudflare:workflows";
 import type { BlueskyAccountConfig, CachedSession } from "./types";
 import { log, warn, error, verbose } from "./log";
-import { MAX_IMAGE_SIZE, SESSION_TTL, BLUESKY_LABELER_DID, BLUESKY_PUBLIC_API } from "./constants";
+import { MAX_IMAGE_SIZE, SESSION_TTL, BLUESKY_LABELER_DID, BLUESKY_PUBLIC_API, DEFAULT_PDS_URL, PLC_DIRECTORY_URL, PDS_CACHE_TTL } from "./constants";
 
 export interface PostResult {
 	uri: string;
@@ -28,14 +28,14 @@ export class BlueskyClient {
 	private handle: string;
 	private password: string;
 
-	constructor(handle: string, password: string) {
+	constructor(handle: string, password: string, service: string) {
 		this.handle = handle;
 		this.password = password;
-		// Derive PDS URL from handle: "user.selfhosted.social" → "https://selfhosted.social"
-		const parts = handle.split(".");
-		const pdsHost = parts.slice(1).join(".");
+		// `service` is the account's resolved PDS endpoint (see resolvePdsUrl). It must
+		// NOT be inferred from the handle: custom-domain handles (e.g. "alice.com") don't
+		// host the account's PDS, so slicing the handle would point auth at the wrong host.
 		this.agent = new AtpAgent({
-			service: `https://${pdsHost}`,
+			service,
 			fetch: async (url, init) => {
 				const response = await globalThis.fetch(url, init);
 				if (response.status === 429) {
@@ -273,6 +273,41 @@ export class BlueskyClient {
 	}
 }
 
+/**
+ * Resolve a handle to its PDS service endpoint: handle → DID → DID document →
+ * `#atproto_pds` service. Falls back to the default entryway when any step fails
+ * (e.g. handle temporarily unresolvable). Never derives the host from the handle.
+ */
+export async function resolvePdsUrl(handle: string): Promise<string> {
+	const did = await resolveHandleToDid(handle);
+	if (!did) return DEFAULT_PDS_URL;
+
+	const docUrl = did.startsWith("did:plc:")
+		? `${PLC_DIRECTORY_URL}/${did}`
+		: did.startsWith("did:web:")
+			? `https://${decodeURIComponent(did.slice("did:web:".length)).replace(/:/g, "/")}/.well-known/did.json`
+			: null;
+	if (!docUrl) return DEFAULT_PDS_URL;
+
+	const res = await fetchWithTimeout(docUrl, 5000);
+	if (!res || !res.ok) return DEFAULT_PDS_URL;
+	const doc = await res.json<{ service?: { id: string; type: string; serviceEndpoint: string }[] }>().catch(() => null);
+	const pds = doc?.service?.find(
+		(s) => s.id.endsWith("#atproto_pds") || s.type === "AtprotoPersonalDataServer",
+	)?.serviceEndpoint;
+	return pds ?? DEFAULT_PDS_URL;
+}
+
+/** Resolve the PDS for an account, caching the mapping in KV to skip the round-trips. */
+async function getPdsUrl(kv: KVNamespace, account: string): Promise<string> {
+	const cacheKey = `pds:${account}`;
+	const cached = await kv.get(cacheKey, "text");
+	if (cached) return cached;
+	const url = await resolvePdsUrl(account);
+	await kv.put(cacheKey, url, { expirationTtl: PDS_CACHE_TTL });
+	return url;
+}
+
 export async function getAuthenticatedClient(
 	kv: KVNamespace,
 	env: { [key: string]: SecretsStoreSecret },
@@ -280,10 +315,11 @@ export async function getAuthenticatedClient(
 ): Promise<BlueskyClient> {
 	const cacheKey = `session:${config.atProtoAccount}`;
 	const cached = await kv.get<CachedSession>(cacheKey, "json");
-	verbose({ tag: "login", handle: config.atProtoAccount, cacheKey, hasCachedSession: !!cached, message: `${config.atProtoAccount}: getAuthenticatedClient cacheKey=${cacheKey} hasCached=${!!cached}` });
+	const service = await getPdsUrl(kv, config.atProtoAccount);
+	verbose({ tag: "login", handle: config.atProtoAccount, cacheKey, service, hasCachedSession: !!cached, message: `${config.atProtoAccount}: getAuthenticatedClient cacheKey=${cacheKey} service=${service} hasCached=${!!cached}` });
 
 	if (cached) {
-		const client = new BlueskyClient(config.atProtoAccount, "");
+		const client = new BlueskyClient(config.atProtoAccount, "", service);
 		const resumed = await client.tryResumeCachedSession(cached);
 		if (resumed) return client;
 	}
@@ -296,7 +332,7 @@ export async function getAuthenticatedClient(
 	}
 	const password = await secret.get();
 
-	const client = new BlueskyClient(config.atProtoAccount, password);
+	const client = new BlueskyClient(config.atProtoAccount, password, service);
 	try {
 		await client.login();
 	} catch (caught) {

@@ -63,19 +63,6 @@ describe.sequential("MirrorItemWorkflow routing", () => {
 		expect(result).toBe("mocked");
 	}, 15_000);
 
-	it("defers a comment whose parent is not yet mirrored (no step, no record)", async () => {
-		const comment = makeComment({ id: "orphan-comment", parentItemId: "missing-video" });
-		const instanceId = `item-comment-defer-${Date.now()}`;
-		await using instance = await introspectWorkflowInstance(env.ITEM_WORKFLOW, instanceId);
-		await env.ITEM_WORKFLOW.create({
-			id: instanceId,
-			params: { item: comment, channelId: TEST_CHANNEL_ID, channelConfig: config },
-		});
-		await instance.waitForStatus("complete", { timeout: 5000 });
-		const record = await env.KV.get(`mirrored:${TEST_CHANNEL_ID}:${comment.id}`);
-		expect(record).toBeNull();
-	}, 15_000);
-
 	it("posts a comment once its parent video is mirrored", async () => {
 		const parent: MirroredRecord = {
 			bskyUri: "at://did/app.bsky.feed.post/parent",

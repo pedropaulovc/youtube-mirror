@@ -6,7 +6,17 @@ import { videoCardDescription, videoPostText } from "../content";
 import type { ChannelConfig, ItemKind, MirroredRecord, VideoItem } from "../types";
 import { Logger, log, warn, verbose } from "../log";
 import { normalizeChannelId } from "../handles";
-import { RECENT_INDEX_TTL_SECONDS } from "../constants";
+import { RECENT_INDEX_TTL_SECONDS, CHAIN_PROGRESS_TTL } from "../constants";
+
+// Persisted progress of a multi-post reply chain, so a retry of the enclosing step
+// resumes from the last posted segment instead of re-posting the root (a duplicate).
+interface ChainProgress {
+	rootUri?: string;
+	rootCid?: string;
+	prevUri?: string;
+	prevCid?: string;
+	chainUris: string[];
+}
 
 export interface PostChainOptions {
 	images?: UploadedMedia[];
@@ -92,6 +102,8 @@ export function buildContext(
 		};
 		const c = normalizeChannelId(cid);
 		await env.KV.put(`mirrored:${c}:${itemId}`, JSON.stringify(record));
+		// The chain is durably recorded now; drop its resume marker.
+		await env.KV.delete(`chain-progress:${c}:${itemId}`);
 
 		// Recency index: a small, self-expiring mirror of the record keyed under
 		// `recent:{channelId}:` so the delete-check lists only the recent window
@@ -112,36 +124,50 @@ export function buildContext(
 		logContext: { channelId: string; itemId: string },
 		options?: PostChainOptions,
 	): Promise<PostResult & { chainUris: string[] }> => {
+		// Resume marker: if the enclosing step already posted some segments before
+		// failing, pick up where it left off rather than duplicating the root/chain.
+		const progressKey = `chain-progress:${normalizeChannelId(logContext.channelId)}:${logContext.itemId}`;
+		const progress: ChainProgress =
+			(await env.KV.get<ChainProgress>(progressKey, "json")) ?? { chainUris: [] };
+
 		// First chunk carries images/external card + any first-chunk facets.
-		const firstResult = await client.createPost(chunks[0], createdAt, {
-			images: options?.images,
-			external: options?.external,
-			replyToUri: options?.replyToUri,
-			replyToCid: options?.replyToCid,
-			replyRootUri: options?.replyRootUri,
-			replyRootCid: options?.replyRootCid,
-			facets: options?.firstChunkFacets,
-		});
+		if (!progress.rootUri) {
+			const firstResult = await client.createPost(chunks[0], createdAt, {
+				images: options?.images,
+				external: options?.external,
+				replyToUri: options?.replyToUri,
+				replyToCid: options?.replyToCid,
+				replyRootUri: options?.replyRootUri,
+				replyRootCid: options?.replyRootCid,
+				facets: options?.firstChunkFacets,
+			});
+			progress.rootUri = firstResult.uri;
+			progress.rootCid = firstResult.cid;
+			progress.prevUri = firstResult.uri;
+			progress.prevCid = firstResult.cid;
+			await env.KV.put(progressKey, JSON.stringify(progress), { expirationTtl: CHAIN_PROGRESS_TTL });
+		}
 
 		// Remaining chunks as self-replies, collecting URIs so the whole chain can
-		// be deleted as a unit (otherwise the tail orphans).
-		const chainUris: string[] = [];
-		let prevResult = firstResult;
-		const rootUri = options?.replyRootUri ?? firstResult.uri;
-		const rootCid = options?.replyRootCid ?? firstResult.cid;
-		for (let i = 1; i < chunks.length; i++) {
+		// be deleted as a unit (otherwise the tail orphans). Resume past segments
+		// already recorded in `progress.chainUris`.
+		const rootUri = options?.replyRootUri ?? progress.rootUri;
+		const rootCid = options?.replyRootCid ?? progress.rootCid;
+		for (let i = 1 + progress.chainUris.length; i < chunks.length; i++) {
 			const replyResult = await client.createPost(chunks[i], createdAt, {
-				replyToUri: prevResult.uri,
-				replyToCid: prevResult.cid,
+				replyToUri: progress.prevUri,
+				replyToCid: progress.prevCid,
 				replyRootUri: rootUri,
 				replyRootCid: rootCid,
 			});
-			chainUris.push(replyResult.uri);
+			progress.chainUris.push(replyResult.uri);
+			progress.prevUri = replyResult.uri;
+			progress.prevCid = replyResult.cid;
+			await env.KV.put(progressKey, JSON.stringify(progress), { expirationTtl: CHAIN_PROGRESS_TTL });
 			verbose({ tag: "bsky-post", type: "chain", channelId: logContext.channelId, itemId: logContext.itemId, chunk: i + 1, totalChunks: chunks.length, bskyUri: replyResult.uri, message: `${logContext.channelId}: chain chunk ${i + 1}/${chunks.length} for ${logContext.itemId} → ${replyResult.uri}` });
-			prevResult = replyResult;
 		}
 
-		return { ...firstResult, chainUris };
+		return { uri: progress.rootUri, cid: progress.rootCid!, chainUris: progress.chainUris };
 	};
 
 	const uploadImages = async (client: BlueskyClient, imageUrls: string[]): Promise<UploadedMedia[]> => {
