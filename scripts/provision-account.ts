@@ -354,7 +354,14 @@ function savePasswordToSecretStore(name: string, password: string): void {
 			`printf '%s' "${password}" | npx wrangler secrets-store secret create ${SECRETS_STORE_ID} --name ${name} --scopes workers --remote`,
 			{ encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
 		);
-	} catch {
+	} catch (err) {
+		// Only the already-exists case is safe to ignore. A transient Cloudflare error,
+		// bad credentials, or wrong store ID must abort — otherwise we'd write bindings and
+		// seed KV pointing at a secret that doesn't exist, and every login would fail.
+		const output = `${(err as { stdout?: string }).stdout ?? ""}${(err as { stderr?: string }).stderr ?? ""}${String(err)}`;
+		if (!/already exists|duplicate/i.test(output)) {
+			throw new Error(`Failed to create secret ${name}: ${output}`);
+		}
 		log("secrets", `Secret ${name} already exists, skipping`);
 	}
 }

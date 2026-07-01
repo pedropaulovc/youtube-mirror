@@ -4,9 +4,16 @@ import { safeCommentCursor } from "../../worker/comment-cursor";
 const c = (publishedAt: string) => ({ publishedAt });
 
 describe("safeCommentCursor", () => {
-	it("advances to the newest comment when all dispatched", () => {
+	it("stays below the newest second even when all dispatched (overlap for same-second late comments)", () => {
+		// A comment created in the newest second just after the fetch would be filtered
+		// out forever by `> cursor`, so hold the cursor at the previous timestamp.
 		const comments = [c("2026-06-01T10:00:00Z"), c("2026-06-01T10:00:05Z"), c("2026-06-01T10:00:09Z")];
-		expect(safeCommentCursor(comments, null)).toBe("2026-06-01T10:00:09Z");
+		expect(safeCommentCursor(comments, null)).toBe("2026-06-01T10:00:05Z");
+	});
+
+	it("does not advance when the whole successful batch sits in one second", () => {
+		const comments = [c("2026-06-01T10:00:05Z"), c("2026-06-01T10:00:05Z")];
+		expect(safeCommentCursor(comments, null)).toBeUndefined();
 	});
 
 	it("returns undefined for an empty batch", () => {

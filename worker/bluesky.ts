@@ -150,11 +150,16 @@ export class BlueskyClient {
 			facets?: AppBskyRichtextFacet.Main[];
 		},
 	): Promise<PostResult> {
-		// Detect facets (clickable links, mentions, hashtags)
+		// Detect facets (clickable links + hashtags). Auto-detected MENTIONS are dropped:
+		// mirrored YouTube text can contain strings like `@someone.com` that resolve to a
+		// real Bluesky handle, which would tag/notify an unrelated user. Explicit mentions
+		// (e.g. commenter attribution) are supplied via `options.facets`.
 		const rt = new RichText({ text });
 		await rt.detectFacets(this.agent);
 
-		const detected = (rt.facets ?? []) as AppBskyRichtextFacet.Main[];
+		const isMention = (f: AppBskyRichtextFacet.Main): boolean =>
+			(f.features ?? []).some((ft) => ft.$type === "app.bsky.richtext.facet#mention");
+		const detected = ((rt.facets ?? []) as AppBskyRichtextFacet.Main[]).filter((f) => !isMention(f));
 		const manual = options?.facets ?? [];
 		const overlapsManual = (f: AppBskyRichtextFacet.Main): boolean =>
 			manual.some((m) => !(m.index.byteEnd <= f.index.byteStart || m.index.byteStart >= f.index.byteEnd));

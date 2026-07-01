@@ -14,14 +14,25 @@ export function safeCommentCursor(
 	comments: ReadonlyArray<{ publishedAt: string }>,
 	firstFailedIndex: number | null,
 ): string | undefined {
-	if (firstFailedIndex === null) return comments[comments.length - 1]?.publishedAt;
+	if (comments.length === 0) return undefined;
 
-	const failedAt = comments[firstFailedIndex]?.publishedAt;
-	if (failedAt === undefined) return comments[comments.length - 1]?.publishedAt;
+	// The boundary second the cursor must stay BELOW:
+	//  - a failed dispatch: the failed comment's timestamp, so it (and everything at or
+	//    after it) is refetched next poll;
+	//  - all dispatched: the newest fetched comment's timestamp — a later comment created
+	//    in that same second would otherwise be filtered out forever by the strict
+	//    `> cursor` refetch.
+	// Hold the cursor at the newest timestamp strictly below the boundary and let
+	// filterNew dedupe the re-fetched overlap. Returns undefined (don't advance) when the
+	// whole batch sits in the boundary second.
+	const limit = firstFailedIndex === null ? comments.length : firstFailedIndex;
+	const boundary = firstFailedIndex === null
+		? comments[comments.length - 1].publishedAt
+		: comments[firstFailedIndex].publishedAt;
 
 	let cursor: string | undefined;
-	for (let i = 0; i < firstFailedIndex; i++) {
-		if (comments[i].publishedAt < failedAt) cursor = comments[i].publishedAt;
+	for (let i = 0; i < limit; i++) {
+		if (comments[i].publishedAt < boundary) cursor = comments[i].publishedAt;
 	}
 	return cursor;
 }

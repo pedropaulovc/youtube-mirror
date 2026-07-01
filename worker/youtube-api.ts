@@ -241,8 +241,13 @@ export async function fetchComments(
 		try {
 			data = await ytFetch<CommentThreadsResponse>("commentThreads", params, accessToken);
 		} catch (err) {
-			// Comments disabled on a video → 403. Non-fatal; skip this video.
 			warn({ tag: "yt-comments", videoId, message: `commentThreads fetch failed for ${videoId}`, error: String(err) });
+			// A FIRST-page failure is non-fatal — commonly a 403 because comments are
+			// disabled (and an empty batch never advances the cursor). But once we've paged
+			// past the first page, threads demonstrably exist, so this is transient; returning
+			// the partial batch would let the caller advance `comment-cursor` past the unread
+			// older-but-still-new threads. Propagate so the step retries.
+			if (pageToken) throw err;
 			morePages = false;
 			break;
 		}
@@ -306,12 +311,12 @@ async function appendThreadReplies(
 			return;
 		} catch (err) {
 			warn({ tag: "yt-comments", videoId, message: `comments.list fetch failed for ${topCommentId}`, error: String(err) });
-			// During an incremental poll, returning only the inline subset would let the
-			// caller advance `comment-cursor` past the replies this failed fetch omitted —
-			// the `> cursor` filter then drops them on every later poll. Propagate so the
-			// workflow step retries. A cold backfill (no cursor) has nothing to strand
-			// replies behind, so the inline subset is an acceptable best-effort there.
-			if (Number.isFinite(afterMs)) throw err;
+			// Returning only the inline subset would let the caller advance `comment-cursor`
+			// past the replies this failed fetch omitted — the `> cursor` filter then drops
+			// them on every later poll. The poller writes a cursor after a successful poll on
+			// BOTH cold backfills and incremental polls, so propagate in either case and let
+			// the workflow step retry.
+			throw err;
 		}
 	}
 

@@ -233,9 +233,9 @@ describe("youtube-api", () => {
 			await expect(fetchComments("vidX", TEST_CHANNEL_ID, "key", "2026-06-01T00:00:00Z")).rejects.toThrow();
 		});
 
-		it("falls back to the inline reply subset on a cold backfill (no cursor)", async () => {
-			// Same failure, but no cursor: there's nothing to strand replies behind, so the
-			// inline subset is an acceptable best-effort and the call resolves.
+		it("propagates a comments.list failure on a cold backfill too (cursor still advances after)", async () => {
+			// The poller writes a cursor after a successful poll even with no prior cursor, so
+			// a partial inline subset would strand the omitted replies. Must reject here too.
 			vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
 				const u = new URL(String(url));
 				if (u.pathname.endsWith("/commentThreads")) {
@@ -246,8 +246,31 @@ describe("youtube-api", () => {
 				return new Response("boom", { status: 500 });
 			});
 
-			const out = await fetchComments("vidX", TEST_CHANNEL_ID, "key"); // no cursor
-			expect(out.map((c) => c.id)).toContain("r-inline");
+			await expect(fetchComments("vidX", TEST_CHANNEL_ID, "key")).rejects.toThrow();
+		});
+
+		it("propagates a thread-page failure past the first page (partial batch is cursor-unsafe)", async () => {
+			// Page 1 succeeds, page 2 (pageToken in use) errors transiently. Returning page 1
+			// alone would let the caller advance the cursor past page 2's still-new threads.
+			let call = 0;
+			vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+				if (!new URL(String(url)).pathname.endsWith("/commentThreads")) return jsonResponse({ items: [] });
+				call++;
+				if (call === 1) return jsonResponse({ items: [topThread("t1", "2026-06-02T10:00:00Z")], nextPageToken: "P2" });
+				return new Response("boom", { status: 503 });
+			});
+
+			await expect(fetchComments("vidX", TEST_CHANNEL_ID, "key", "2026-06-01T00:00:00Z")).rejects.toThrow();
+		});
+
+		it("skips a video whose FIRST comment page fails (comments disabled → non-fatal)", async () => {
+			vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+				if (!new URL(String(url)).pathname.endsWith("/commentThreads")) return jsonResponse({ items: [] });
+				return new Response("comments disabled", { status: 403 });
+			});
+
+			const out = await fetchComments("vidX", TEST_CHANNEL_ID, "key"); // resolves empty, doesn't throw
+			expect(out).toEqual([]);
 		});
 	});
 });

@@ -16,7 +16,17 @@ vi.mock("@atproto/api", () => {
 		};
 	}
 	function RichText(opts: { text: string }) {
-		return { text: opts.text, facets: [], detectFacets: vi.fn().mockResolvedValue(undefined) };
+		const facets: unknown[] = [];
+		// Simulate @atproto's detection: an `@…` handle becomes a mention facet and an
+		// `http…` becomes a link facet. Text without those markers yields no facets, so
+		// other tests are unaffected.
+		const detectFacets = vi.fn().mockImplementation(async () => {
+			const at = opts.text.indexOf("@");
+			if (at >= 0) facets.push({ index: { byteStart: at, byteEnd: at + 8 }, features: [{ $type: "app.bsky.richtext.facet#mention", did: "did:plc:stranger" }] });
+			const http = opts.text.indexOf("http");
+			if (http >= 0) facets.push({ index: { byteStart: http, byteEnd: http + 8 }, features: [{ $type: "app.bsky.richtext.facet#link", uri: "https://x" }] });
+		});
+		return { text: opts.text, facets, detectFacets };
 	}
 	return { AtpAgent, RichText };
 });
@@ -60,6 +70,20 @@ describe("BlueskyClient.createPost", () => {
 		const reply = lastPostRecord?.reply as { root: { uri: string }; parent: { uri: string } };
 		expect(reply.parent.uri).toBe("at://parent");
 		expect(reply.root.uri).toBe("at://root");
+	});
+
+	it("drops auto-detected mentions but keeps links and explicit facets", async () => {
+		const client = new BlueskyClient("testchannel.selfhosted.social", "pw", "https://selfhosted.social");
+		// "bob" (bytes 0-3) is an explicitly-supplied author mention; the text also contains
+		// an auto-detectable @stranger handle (must be dropped) and a link (must be kept).
+		const manual = [{ index: { byteStart: 0, byteEnd: 3 }, features: [{ $type: "app.bsky.richtext.facet#mention", did: "did:plc:author" }] }];
+		await client.createPost("bob replied @stranger see http://x", new Date(), { facets: manual as never });
+
+		const facets = (lastPostRecord?.facets ?? []) as { features: { $type: string; did?: string }[] }[];
+		const features = facets.flatMap((f) => f.features);
+		const mentionDids = features.filter((ft) => ft.$type === "app.bsky.richtext.facet#mention").map((ft) => ft.did);
+		expect(mentionDids).toEqual(["did:plc:author"]); // only the explicit one survives
+		expect(features.some((ft) => ft.$type === "app.bsky.richtext.facet#link")).toBe(true);
 	});
 
 	it("defaults the reply root to the parent when no root is given", async () => {
