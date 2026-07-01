@@ -279,32 +279,47 @@ export class BlueskyClient {
  * (e.g. handle temporarily unresolvable). Never derives the host from the handle.
  */
 export async function resolvePdsUrl(handle: string): Promise<string> {
+	return (await resolvePds(handle)).url;
+}
+
+/**
+ * Resolve a handle's PDS via its DID document. `confirmed` is false when we fell
+ * back to the default PDS because DID/PLC resolution failed (unknown handle, doc
+ * fetch timeout/error, or no `#atproto_pds` service) — callers must not cache an
+ * unconfirmed result, or a transient outage would pin self-hosted accounts to the
+ * wrong PDS for the full cache TTL.
+ */
+async function resolvePds(handle: string): Promise<{ url: string; confirmed: boolean }> {
+	const fallback = { url: DEFAULT_PDS_URL, confirmed: false };
 	const did = await resolveHandleToDid(handle);
-	if (!did) return DEFAULT_PDS_URL;
+	if (!did) return fallback;
 
 	const docUrl = did.startsWith("did:plc:")
 		? `${PLC_DIRECTORY_URL}/${did}`
 		: did.startsWith("did:web:")
 			? `https://${decodeURIComponent(did.slice("did:web:".length)).replace(/:/g, "/")}/.well-known/did.json`
 			: null;
-	if (!docUrl) return DEFAULT_PDS_URL;
+	if (!docUrl) return fallback;
 
 	const res = await fetchWithTimeout(docUrl, 5000);
-	if (!res || !res.ok) return DEFAULT_PDS_URL;
+	if (!res || !res.ok) return fallback;
 	const doc = await res.json<{ service?: { id: string; type: string; serviceEndpoint: string }[] }>().catch(() => null);
 	const pds = doc?.service?.find(
 		(s) => s.id.endsWith("#atproto_pds") || s.type === "AtprotoPersonalDataServer",
 	)?.serviceEndpoint;
-	return pds ?? DEFAULT_PDS_URL;
+	if (!pds) return fallback;
+	return { url: pds, confirmed: true };
 }
 
-/** Resolve the PDS for an account, caching the mapping in KV to skip the round-trips. */
+/** Resolve the PDS for an account, caching confirmed resolutions in KV to skip the round-trips. */
 async function getPdsUrl(kv: KVNamespace, account: string): Promise<string> {
 	const cacheKey = `pds:${account}`;
 	const cached = await kv.get(cacheKey, "text");
 	if (cached) return cached;
-	const url = await resolvePdsUrl(account);
-	await kv.put(cacheKey, url, { expirationTtl: PDS_CACHE_TTL });
+	const { url, confirmed } = await resolvePds(account);
+	// Never cache a fallback: a transient DID/PLC failure would otherwise mis-route
+	// every login for this account until the TTL expires.
+	if (confirmed) await kv.put(cacheKey, url, { expirationTtl: PDS_CACHE_TTL });
 	return url;
 }
 

@@ -569,8 +569,13 @@ async function main() {
 	savePasswordToSecretStore(`youtube-mirror-atproto-password-${channelId}`, mainPassword);
 	savePasswordToSecretStore(`youtube-mirror-atproto-password-${channelId}-rt`, rtPassword);
 	updateWranglerBindings(channelId);
-	addKvConfig(channelId, youtubeHandle, mainHandle, rtHandle, mainEmail, rtEmail, maxItems);
+	// Deploy the app-password bindings BEFORE seeding the KV row. The minute cron
+	// discovers `users:{channelId}` the instant it lands, so if KV were seeded first
+	// the first poll could dispatch item workflows whose `passwordKey` bindings aren't
+	// live yet. (The channel workflow's restart-on-terminal-failure path re-runs any
+	// item that erred during the deploy gap, but seeding last avoids the race entirely.)
 	deployViaGit(channelId, youtubeHandle);
+	addKvConfig(channelId, youtubeHandle, mainHandle, rtHandle, mainEmail, rtEmail, maxItems);
 
 	log("main", "");
 	log("main", "=== Provisioning complete! ===");

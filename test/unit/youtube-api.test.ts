@@ -151,6 +151,37 @@ describe("youtube-api", () => {
 			expect(out.map((c) => c.id).sort()).toEqual(["t1", "t2"]);
 		});
 
+		it("incremental polls drain every thread newer than the cursor across pages", async () => {
+			// Both threads are newer than the cursor but split across two pages. Before the
+			// fix, a cursored poll used the default cap (maxPages=1), stopped after page 1,
+			// and dropped t2 — then the caller advanced the cursor past it, losing it forever.
+			let call = 0;
+			vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+				call++;
+				if (new URL(String(url)).searchParams.get("pageToken") == null) {
+					return jsonResponse({ items: [topThread("t1", "2026-06-02T10:00:00Z")], nextPageToken: "P2" });
+				}
+				return jsonResponse({ items: [topThread("t2", "2026-06-01T12:00:00Z")] });
+			});
+
+			const out = await fetchComments("vidX", TEST_CHANNEL_ID, "key", "2026-06-01T00:00:00Z");
+			expect(call).toBe(2); // paged past the default cap to reach the cursor
+			expect(out.map((c) => c.id).sort()).toEqual(["t1", "t2"]);
+		});
+
+		it("cold start (no cursor) caps at the backfill size instead of draining all history", async () => {
+			// Every page reports another page available; a cold start must still stop at the
+			// bounded backfill rather than walking the video's entire comment history.
+			let call = 0;
+			vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+				call++;
+				return jsonResponse({ items: [topThread(`t${call}`, "2026-06-01T10:00:00Z")], nextPageToken: `P${call + 1}` });
+			});
+
+			await fetchComments("vidX", TEST_CHANNEL_ID, "key"); // no cursor, default cap 100
+			expect(call).toBe(1); // ceil(100/100) = 1 page — bounded, not a full drain
+		});
+
 		it("fetches the full reply set via comments.list when a thread has more than the inline replies", async () => {
 			let commentsListCalled = false;
 			vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
@@ -183,6 +214,40 @@ describe("youtube-api", () => {
 			expect(ids).toContain("r1");
 			expect(ids).toContain("r3");
 			expect(ids).not.toContain("r-inline"); // the full set replaced the inline subset
+		});
+
+		it("propagates a comments.list failure during an incremental poll (cursor-unsafe)", async () => {
+			// Thread has more replies than the inline subset; comments.list errors. With a
+			// cursor set, returning the inline subset would let the caller advance past the
+			// omitted replies — so the fetch must reject and let the step retry.
+			vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+				const u = new URL(String(url));
+				if (u.pathname.endsWith("/commentThreads")) {
+					return jsonResponse({
+						items: [{ ...topThread("top1", "2026-06-02T10:00:00Z", { totalReplyCount: 3 }), replies: { comments: [{ id: "r-inline", snippet: { textOriginal: "x", publishedAt: "2026-06-02T10:05:00Z" } }] } }],
+					});
+				}
+				return new Response("boom", { status: 500 }); // comments.list fails
+			});
+
+			await expect(fetchComments("vidX", TEST_CHANNEL_ID, "key", "2026-06-01T00:00:00Z")).rejects.toThrow();
+		});
+
+		it("falls back to the inline reply subset on a cold backfill (no cursor)", async () => {
+			// Same failure, but no cursor: there's nothing to strand replies behind, so the
+			// inline subset is an acceptable best-effort and the call resolves.
+			vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+				const u = new URL(String(url));
+				if (u.pathname.endsWith("/commentThreads")) {
+					return jsonResponse({
+						items: [{ ...topThread("top1", "2026-06-02T10:00:00Z", { totalReplyCount: 3 }), replies: { comments: [{ id: "r-inline", snippet: { textOriginal: "x", publishedAt: "2026-06-02T10:05:00Z" } }] } }],
+					});
+				}
+				return new Response("boom", { status: 500 });
+			});
+
+			const out = await fetchComments("vidX", TEST_CHANNEL_ID, "key"); // no cursor
+			expect(out.map((c) => c.id)).toContain("r-inline");
 		});
 	});
 });

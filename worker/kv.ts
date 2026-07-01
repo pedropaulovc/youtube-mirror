@@ -21,8 +21,16 @@ export class KvStore {
 	}
 
 	async listChannelIds(): Promise<string[]> {
-		const keys = await this.kv.list({ prefix: "users:" });
-		return keys.keys.map((k) => normalizeChannelId(k.name.replace("users:", "")));
+		// Page through every `users:` key. KV.list returns at most 1000 keys per call;
+		// a single call would silently stop polling channels past the first page.
+		const ids: string[] = [];
+		let cursor: string | undefined;
+		do {
+			const page = await this.kv.list({ prefix: "users:", cursor });
+			for (const k of page.keys) ids.push(normalizeChannelId(k.name.replace("users:", "")));
+			cursor = page.list_complete ? undefined : page.cursor;
+		} while (cursor);
+		return ids;
 	}
 
 	// --- Mirrored records ---

@@ -4,6 +4,7 @@ import { fetchRecentVideoIds, fetchVideos, fetchComments, uploadsPlaylistId } fr
 import { getYouTubeAccessToken } from "./gcp-token";
 import { fetchCommunityPosts } from "./firecrawl";
 import { createWorkflowWithRetry } from "./cron-dispatch";
+import { safeCommentCursor } from "./comment-cursor";
 import { stepDo } from "./step";
 import { itemWorkflowId } from "./types";
 import type { ChannelConfig, ChannelMeta, CommentItem, CommunityPostItem, ContentItem, MirroredRecord, VideoItem } from "./types";
@@ -135,13 +136,18 @@ export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannel
 			// newComments is oldest-first. Advance the cursor only across the leading
 			// run of comments that dispatched successfully: the first failed dispatch
 			// caps the cursor so that comment (and everything after it) is refetched
-			// next poll instead of being silently skipped.
-			let cursorAdvance: string | undefined;
-			for (const comment of newComments) {
-				const ok = await this.dispatchItem(channelId, channelConfig, comment, workflowId);
-				if (!ok) break;
-				cursorAdvance = comment.publishedAt;
+			// next poll instead of being silently skipped. safeCommentCursor also guards
+			// second-granular timestamp ties so the cursor never lands on a failed
+			// comment's timestamp (the `> cursor` refetch filter would drop it).
+			let firstFailedIndex: number | null = null;
+			for (let i = 0; i < newComments.length; i++) {
+				const ok = await this.dispatchItem(channelId, channelConfig, newComments[i], workflowId);
+				if (!ok) {
+					firstFailedIndex = i;
+					break;
+				}
 			}
+			const cursorAdvance = safeCommentCursor(newComments, firstFailedIndex);
 
 			if (cursorAdvance) {
 				const newest = cursorAdvance;

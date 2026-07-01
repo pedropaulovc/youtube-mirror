@@ -203,24 +203,37 @@ export async function fetchComments(
 	channelId: string,
 	accessToken: string,
 	after?: string,
-	maxThreads: number = 100,
+	backfillCap: number = 100,
 ): Promise<CommentItem[]> {
 	const afterMs = after ? new Date(after).getTime() : -Infinity;
+	const incremental = Number.isFinite(afterMs);
 	const out: CommentItem[] = [];
 
-	// Page through comment threads (newest first). Without this, a burst of >100 new
-	// threads between polls would be truncated to the first page and the cursor would
-	// advance past the older still-new threads on later pages, dropping them forever.
-	const maxPages = Math.max(1, Math.ceil(maxThreads / 100));
+	// Two regimes, threads fetched newest-first:
+	//  - Incremental (cursor set): drain EVERY thread newer than the cursor, across as
+	//    many pages as it takes. The caller advances the cursor to the newest thread it
+	//    sees, so stopping early strands the older-but-still-new threads on unfetched
+	//    pages forever. HARD_PAGE_CAP only bounds the pathological case of a video
+	//    gaining thousands of comments in one poll window (logged, not silent).
+	//  - Cold start (no cursor): take just the newest `backfillCap` threads as a bounded
+	//    backfill — don't drain the video's entire comment history on first sight.
+	const HARD_PAGE_CAP = 20;
+	const maxPages = incremental ? HARD_PAGE_CAP : Math.max(1, Math.ceil(backfillCap / 100));
 	let pageToken: string | undefined;
 	let threadCount = 0;
-	for (let page = 0; page < maxPages && threadCount < maxThreads; page++) {
+	let morePages = false;
+	for (let page = 0; page < maxPages; page++) {
+		const remaining = incremental ? 100 : Math.min(100, backfillCap - threadCount);
+		if (remaining <= 0) {
+			morePages = true; // cold-start backfill cap reached (bounded by design)
+			break;
+		}
 		const params: { [key: string]: string } = {
 			part: "snippet,replies",
 			videoId,
 			order: "time",
 			textFormat: "plainText", // else textDisplay carries HTML markup/entities
-			maxResults: String(Math.min(100, maxThreads - threadCount)),
+			maxResults: String(remaining),
 		};
 		if (pageToken) params.pageToken = pageToken;
 
@@ -230,6 +243,7 @@ export async function fetchComments(
 		} catch (err) {
 			// Comments disabled on a video → 403. Non-fatal; skip this video.
 			warn({ tag: "yt-comments", videoId, message: `commentThreads fetch failed for ${videoId}`, error: String(err) });
+			morePages = false;
 			break;
 		}
 
@@ -247,9 +261,20 @@ export async function fetchComments(
 		}
 
 		// Threads are newest-first: once an entire page predates the cursor, every
-		// later page does too, so stop paging.
-		if (!data.nextPageToken || newestInPage <= afterMs) break;
+		// later page does too. Stop, too, when the API has no further pages.
+		if (newestInPage <= afterMs || !data.nextPageToken) {
+			morePages = false;
+			break;
+		}
 		pageToken = data.nextPageToken;
+		morePages = true; // a next page exists; if the loop cap stops us, this stays true
+	}
+
+	// Incremental poll that hit the page cap with threads newer than the cursor still
+	// unfetched: the caller will advance the cursor past them. Rare (>2000 new comments
+	// in one window), but surface it rather than dropping silently.
+	if (incremental && morePages) {
+		warn({ tag: "yt-comments", videoId, message: `comment paging hit ${HARD_PAGE_CAP}-page cap for ${videoId}; older new comments this cycle may be skipped` });
 	}
 
 	// Oldest-first so parents precede replies when dispatched.
@@ -280,8 +305,13 @@ async function appendThreadReplies(
 			out.push(...replies);
 			return;
 		} catch (err) {
-			// Fall back to the inline subset if the replies fetch fails.
 			warn({ tag: "yt-comments", videoId, message: `comments.list fetch failed for ${topCommentId}`, error: String(err) });
+			// During an incremental poll, returning only the inline subset would let the
+			// caller advance `comment-cursor` past the replies this failed fetch omitted —
+			// the `> cursor` filter then drops them on every later poll. Propagate so the
+			// workflow step retries. A cold backfill (no cursor) has nothing to strand
+			// replies behind, so the inline subset is an acceptable best-effort there.
+			if (Number.isFinite(afterMs)) throw err;
 		}
 	}
 
