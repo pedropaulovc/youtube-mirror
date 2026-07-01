@@ -17,7 +17,7 @@ const SECRETS_STORE_ID = "f0c7662b60484d17a094e384a3853ab9";
 const KV_NAMESPACE_ID = "4678dd1b9ac742439e0a0b029b1e9d03";
 const OP_ENVIRONMENT = "bykx5xzmykwxw3of4gtncs7i7i";
 // 1Password vault reachable by the service-account token in .env.local.
-const BACKUP_VAULT = "twitter-mirror-backup";
+const BACKUP_VAULT = "youtube-mirror";
 const BIRTH_DATE_ISO = "1991-03-01";
 const EMAIL_BASE = "pedro+youtube-mirror";
 const EMAIL_DOMAIN = "vza.net";
