@@ -17,7 +17,7 @@ const SECRETS_STORE_ID = "f0c7662b60484d17a094e384a3853ab9";
 const KV_NAMESPACE_ID = "4678dd1b9ac742439e0a0b029b1e9d03";
 const OP_ENVIRONMENT = "bykx5xzmykwxw3of4gtncs7i7i";
 // 1Password vault reachable by the service-account token in .env.local.
-const BACKUP_VAULT = "twitter-mirror-backup";
+const BACKUP_VAULT = "youtube-mirror";
 const BIRTH_DATE_ISO = "1991-03-01";
 const EMAIL_BASE = "pedro+youtube-mirror";
 const EMAIL_DOMAIN = "vza.net";
@@ -460,7 +460,7 @@ function deployViaGit(channelId: string, youtubeHandle: string): void {
 	try { run("git diff --cached --quiet"); log("deploy", "No changes to commit, skipping"); return; } catch { /* has staged changes */ }
 	runPassthrough(`git commit -m "Add ${youtubeHandle} (${channelId}) mirror account bindings"`);
 	runPassthrough("git push");
-	log("deploy", "Pushed to remote. Cloudflare CI/CD will deploy.");
+	log("deploy", "Pushed to remote. Open a PR and merge to main — the CI/CD deploy job ships the bindings.");
 }
 
 // ── Main ───────────────────────────────────────────────────────────────
@@ -582,18 +582,37 @@ async function main() {
 	// live yet. (The channel workflow's restart-on-terminal-failure path re-runs any
 	// item that erred during the deploy gap, but seeding last avoids the race entirely.)
 	deployViaGit(channelId, youtubeHandle);
+
+	// Seed KV LAST, and only once the app-password bindings are actually deployed.
+	// Our CD deploys on merge-to-main (gated PR), not on any push — so seeding KV in
+	// the same run would let the minute cron discover `users:{channelId}` and dispatch
+	// item workflows whose `passwordKey` bindings aren't live yet. Gate it behind
+	// --seed-kv: first run creates accounts/secrets + commits bindings; after the PR
+	// merges and deploys, re-run the SAME command with --seed-kv (idempotent no-ops
+	// through the earlier phases) to seed KV and start mirroring race-free.
+	if (!flags.includes("--seed-kv")) {
+		log("main", "");
+		log("main", "=== Accounts + secrets provisioned; bindings committed. ===");
+		log("main", `Main: https://bsky.app/profile/${mainHandle}.${PDS_HOST}`);
+		log("main", `RT:   https://bsky.app/profile/${rtHandle}.${PDS_HOST}`);
+		log("main", "");
+		log("main", "Next: open a PR for the pushed branch, merge to main (deploys the bindings),");
+		log("main", "then re-run this SAME command with --seed-kv to seed KV and start mirroring:");
+		log("main", `  npx tsx scripts/provision-account.ts ${channelId} ${youtubeHandle} - - - - --max=${maxItems} --seed-kv`);
+		return;
+	}
+
 	addKvConfig(channelId, youtubeHandle, mainHandle, rtHandle, mainEmail, rtEmail, maxItems);
 
 	log("main", "");
-	log("main", "=== Provisioning complete! ===");
+	log("main", "=== Provisioning complete! KV seeded — mirroring starts on next cron. ===");
 	log("main", `Main: https://bsky.app/profile/${mainHandle}.${PDS_HOST}`);
 	log("main", `RT:   https://bsky.app/profile/${rtHandle}.${PDS_HOST}`);
 	log("main", `maxItems cap: ${maxItems}`);
 	log("main", "");
 	log("main", "Passwords saved to secrets store and backed up to 1Password.");
 	log("main", "");
-	log("main", "After the PR is merged and deployed, the channel cron backfills automatically,");
-	log("main", "or trigger the first mirror manually with:");
+	log("main", "The channel cron backfills automatically, or trigger the first mirror now with:");
 	log("main", `  op run --environment ${OP_ENVIRONMENT} -- npx wrangler workflows trigger youtube-mirror-channel --config wrangler.mirror-channel.jsonc --id="mirror-${youtubeHandle}-$(date -u +%Y-%m-%dT%H-%M-%S)" --params='{"channelId":"${channelId}"}'`);
 }
 

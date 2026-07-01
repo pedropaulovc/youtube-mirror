@@ -67,6 +67,16 @@
 			"binding": "FIRECRAWL_API_TOKEN",
 			"store_id": "f0c7662b60484d17a094e384a3853ab9",
 			"secret_name": "youtube-mirror-firecrawl-api-token"
+		},
+		{
+			"binding": "youtube-mirror-atproto-password-UC5NO8MgTQKHAWXp6z8Xl7yQ",
+			"store_id": "f0c7662b60484d17a094e384a3853ab9",
+			"secret_name": "youtube-mirror-atproto-password-UC5NO8MgTQKHAWXp6z8Xl7yQ"
+		},
+		{
+			"binding": "youtube-mirror-atproto-password-UC5NO8MgTQKHAWXp6z8Xl7yQ-rt",
+			"store_id": "f0c7662b60484d17a094e384a3853ab9",
+			"secret_name": "youtube-mirror-atproto-password-UC5NO8MgTQKHAWXp6z8Xl7yQ-rt"
 		}
 	]
 }
