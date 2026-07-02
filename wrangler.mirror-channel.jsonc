@@ -6,7 +6,23 @@
 	"compatibility_flags": ["nodejs_compat"],
 	"observability": {
 		"enabled": true,
-		"head_sampling_rate": 1
+		"head_sampling_rate": 1,
+		// Cloudflare emits OTLP JSON to these named account-level destinations,
+		// which POST to the youtube-mirror telemetry gateway (/v1/{logs,traces}).
+		// The gateway transcodes to protobuf and forwards to Azure Monitor OTLP/DCR.
+		"logs": {
+			"enabled": true,
+			"head_sampling_rate": 1,
+			"persist": false,
+			"invocation_logs": true,
+			"destinations": ["youtube-azure-logs"]
+		},
+		"traces": {
+			"enabled": true,
+			"head_sampling_rate": 1,
+			"persist": false,
+			"destinations": ["youtube-azure-traces"]
+		}
 	},
 	// All four workflow bindings are declared here so `wrangler types` emits a
 	// single unified `Env` covering every worker in the project. CHANNEL_WORKFLOW

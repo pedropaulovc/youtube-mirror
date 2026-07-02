@@ -1,4 +1,5 @@
 import { signAssertion } from "./oidc-sign";
+import { encodeLogsRequest, encodeTraceRequest } from "./otlp-protobuf";
 
 interface Env {
   TENANT_ID: string;
@@ -70,7 +71,18 @@ export async function getEntraToken(env: Env): Promise<string> {
   return tokenCache.token;
 }
 
-async function forwardOtlp(request: Request, env: Env, endpoint: string): Promise<Response> {
+// Cloudflare's Workers-observability OTLP exporter ships OTLP/HTTP JSON. Azure
+// Monitor's managed OTLP/DCR ingestion endpoints only accept protobuf (JSON →
+// HTTP 415), so we transcode per signal before forwarding. `encode` maps the
+// parsed OTLP JSON to protobuf wire bytes.
+type OtlpEncoder = (json: Record<string, unknown>) => Uint8Array;
+
+async function forwardOtlp(
+  request: Request,
+  env: Env,
+  endpoint: string,
+  encode: OtlpEncoder,
+): Promise<Response> {
   // The Cloudflare Workers OTLP exporter authenticates to us with a shared bearer
   // (set on the observability destination). Reject anything else, but answer 200 so
   // a misconfigured exporter doesn't retry-storm.
@@ -84,31 +96,34 @@ async function forwardOtlp(request: Request, env: Env, endpoint: string): Promis
     return new Response("OK", { status: 200 });
   }
 
-  // Azure Monitor's OTLP/DCR endpoint accepts identity-encoded OTLP JSON or protobuf.
-  // Decompress gzip so we can forward with an explicit Content-Type and no encoding.
-  let payload: Uint8Array;
+  // Cloudflare gzips the OTLP JSON body. Decompress, then transcode to protobuf.
+  let jsonText: string;
   const firstBytes = new Uint8Array(rawBytes.slice(0, 2));
   if (firstBytes[0] === 0x1f && firstBytes[1] === 0x8b) {
     const ds = new DecompressionStream("gzip");
     const writer = ds.writable.getWriter();
     writer.write(rawBytes);
     writer.close();
-    payload = new Uint8Array(await new Response(ds.readable).arrayBuffer());
+    jsonText = await new Response(ds.readable).text();
   } else {
-    payload = new Uint8Array(rawBytes);
+    jsonText = new TextDecoder().decode(rawBytes);
   }
 
+  if (jsonText.length === 0) {
+    return new Response("OK", { status: 200 });
+  }
+
+  const payload = encode(JSON.parse(jsonText) as Record<string, unknown>);
   if (payload.byteLength === 0) {
     return new Response("OK", { status: 200 });
   }
 
-  const contentType = request.headers.get("Content-Type") || "application/json";
   const token = await getEntraToken(env);
 
   const upstream = await fetch(endpoint, {
     method: "POST",
     headers: {
-      "Content-Type": contentType,
+      "Content-Type": "application/x-protobuf",
       Authorization: `Bearer ${token}`,
     },
     body: payload,
@@ -137,10 +152,11 @@ export default {
 
     // The OIDC discovery + JWKS this gateway's assertions validate against live in
     // the standalone youtube-mirror-oidc-issuer worker (GATEWAY_ISSUER_URL).
+    // Cloudflare Workers observability emits only logs + traces (no metrics), so
+    // the metrics endpoint is left unwired.
     if (request.method === "POST") {
-      if (path === "/v1/traces") return forwardOtlp(request, env, env.OTLP_TRACES_ENDPOINT);
-      if (path === "/v1/metrics") return forwardOtlp(request, env, env.OTLP_METRICS_ENDPOINT);
-      if (path === "/v1/logs") return forwardOtlp(request, env, env.OTLP_LOGS_ENDPOINT);
+      if (path === "/v1/traces") return forwardOtlp(request, env, env.OTLP_TRACES_ENDPOINT, encodeTraceRequest);
+      if (path === "/v1/logs") return forwardOtlp(request, env, env.OTLP_LOGS_ENDPOINT, encodeLogsRequest);
     }
 
     return new Response("OK", { status: 200 });

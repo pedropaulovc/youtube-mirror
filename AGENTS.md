@@ -29,7 +29,7 @@ npm run cf-typegen   # regenerate worker-configuration.d.ts after editing a wran
 | `youtube-mirror-item` | `MirrorItemWorkflow` | none (binding) | Mirror a single video / community post / comment (router → handlers) |
 | `youtube-mirror-delete` | `MirrorDeleteWorkflow` | `0 * * * *` | Detect removed videos, delete their Bluesky posts |
 | `youtube-mirror-profile` | `MirrorProfileWorkflow` | `0 * * * *` | Sync channel title/description/avatar/banner → Bluesky |
-| `youtube-mirror-telemetry-gateway` | — | — | OTLP → Azure Monitor DCR forwarder (standalone; per-signal, Entra-bearer) |
+| `youtube-mirror-telemetry-gateway` | — | — | OTLP JSON→protobuf transcoder + Azure Monitor DCR forwarder (standalone; per-signal, Entra-bearer) |
 
 **Content routing**
 - **Video** → main-account post: title + `app.bsky.embed.external` link card (thumbnail → watch URL). The description becomes a **threaded self-reply chain**.
@@ -105,7 +105,7 @@ Placeholder IDs live in the `wrangler.mirror-*.jsonc` configs. To go live:
 3. Provision two Bluesky accounts per channel (main + RT), and the GCP + Azure federation resources (`infra/federation.md`).
 4. Seed a channel: `scripts/seed-channel.ts` (writes `users:{channelId}`).
 5. `npm run cf-typegen` (regenerate types), then `npm run build`, then `npm run deploy`.
-6. Telemetry (optional): the gateway forwards OTLP natively to Azure Monitor's DCR ingestion endpoints (one per signal: `OTLP_{TRACES,METRICS,LOGS}_ENDPOINT`), authenticating with an Entra bearer minted via federated credentials. Fill `wrangler.mirror-telemetry-gateway.jsonc` vars with your `TENANT_ID`/`APP_CLIENT_ID`/`OIDC_ISSUER_URL` + the three DCR endpoint URLs; bind `OIDC_SIGNING_KEY` from the Secrets Store and set `INGEST_BEARER` as a wrangler secret; point each worker's `observability.logs/traces.destinations` at the gateway (it routes `POST /v1/{traces,metrics,logs}` to the matching DCR stream).
+6. Telemetry (optional): Cloudflare Workers observability emits OTLP **JSON** (logs + traces), but Azure Monitor's managed OTLP/DCR ingestion endpoints only accept **protobuf** (`application/json` → HTTP 415). The gateway (`worker/otlp-protobuf.ts`) transcodes JSON→protobuf and forwards to Azure Monitor's DCR endpoints (`OTLP_{TRACES,LOGS}_ENDPOINT`), authenticating with an Entra bearer minted via federated credentials. Fill `wrangler.mirror-telemetry-gateway.jsonc` vars with your `TENANT_ID`/`APP_CLIENT_ID`/`OIDC_ISSUER_URL` + the DCR endpoint URLs; bind `OIDC_SIGNING_KEY` from the Secrets Store and set `INGEST_BEARER` as a wrangler secret. Create account-level observability destinations (`youtube-azure-logs`/`youtube-azure-traces`) whose URL is the gateway's `/v1/{logs,traces}` and whose `Authorization: Bearer` header matches `INGEST_BEARER`; the four content workers reference those slugs in `observability.logs/traces.destinations`. (Metrics are not emitted by Workers observability, so `/v1/metrics` is unwired.)
 
 ## Debugging
 
