@@ -119,6 +119,25 @@ curl -s "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workflows/you
 
 All Bluesky post creation logs `tag: "bsky-post"` with `bskyUri`, `channelId`, `itemId`, `kind`, `account` — search logs by the bsky post rkey to trace a post back to its YouTube item.
 
+**Production logs in Azure (via the telemetry gateway).** Logs/traces land in the
+Application Insights component `ai-youtube-mirror-wu2` (rg `rg-youtube-mirror-wu2`),
+backed by an auto-created **managed** Log Analytics workspace
+(`managed-ai-youtube-mirror-wu2-ws`) — *not* a standalone workspace. Query it by App ID
+with the **classic** table names (`traces`/`requests`/`dependencies`/`exceptions`), not the
+workspace-mode `App*` names. The structured worker log is the `traces.message` field itself
+(JSON with `tag`, `message`, `itemId`, …); Cloudflare metadata is in `customDimensions`.
+
+```bash
+az login --tenant 6f10d2eb-7cce-444c-bf11-d6fe61d7b8f8   # AppId: 2f35dfeb-4f9e-4501-aea7-06b2dc3b6c65
+APP=2f35dfeb-4f9e-4501-aea7-06b2dc3b6c65
+# recent errors/warnings across all workers
+az monitor app-insights query --app "$APP" --analytics-query \
+  "traces | where timestamp > ago(1h) and severityLevel >= 2 | project timestamp, cloud_RoleName, message"
+# trace a YouTube item end-to-end (scrape → item workflow → bsky-post)
+az monitor app-insights query --app "$APP" --analytics-query \
+  "traces | where message has '<itemId>' | project timestamp, cloud_RoleName, message | order by timestamp asc"
+```
+
 ## Code Conventions
 
 - **TypeScript** strict, no `any` (use `unknown` / structured casts at KV/AT-Protocol boundaries), named exports, `kebab-case.ts` modules.
