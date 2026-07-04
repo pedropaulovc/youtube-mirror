@@ -18,7 +18,7 @@ describe("firecrawl", () => {
 	afterEach(() => vi.restoreAllMocks());
 
 	it("builds the community tab URL from a handle", () => {
-		expect(communityTabUrl("@MyChannel")).toBe("https://www.youtube.com/@mychannel/community");
+		expect(communityTabUrl("@MyChannel")).toBe("https://www.youtube.com/@mychannel/posts?hl=en");
 	});
 
 	describe("postIdFromUrl", () => {

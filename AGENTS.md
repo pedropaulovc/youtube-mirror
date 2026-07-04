@@ -39,7 +39,7 @@ npm run cf-typegen   # regenerate worker-configuration.d.ts after editing a wran
 ## Data sources
 
 - **Videos + comments**: YouTube **Data API v3**, authenticated with a service-account OAuth token via GCP Workload Identity Federation (no static API key — see `infra/federation.md` and `worker/gcp-token.ts`). Uploads-playlist polling (`UC…`→`UU…`, 1 quota unit/call — never `search.list`, which is 100). `videos.list`, `commentThreads.list`.
-- **Community posts**: **Firecrawl** (`FIRECRAWL_API_TOKEN`) scraping `youtube.com/@handle/community` — the Data API has no community-post endpoint. Requests **raw HTML only** and parses the page's `ytInitialData` locally (avoids Firecrawl's costly LLM JSON extraction). Best-effort; never blocks video/comment mirroring.
+- **Community posts**: **Firecrawl** (`FIRECRAWL_API_TOKEN`) scraping `youtube.com/@handle/posts` (YouTube renamed the tab from `/community`; the old path now 200s with a "This Community isn't available" stub) — the Data API has no community-post endpoint. Requests **raw HTML only** and parses the page's `ytInitialData` locally (avoids Firecrawl's costly LLM JSON extraction). Best-effort; never blocks video/comment mirroring.
 
 ## KV Schema
 
