@@ -10,7 +10,10 @@ import { warn, verbose } from "./log";
 // full community feed into a `ytInitialData` blob in the page, which we parse here.
 
 export function communityTabUrl(handle: string): string {
-	return `https://www.youtube.com/@${normalizeHandle(handle)}/community`;
+	// YouTube renamed the channel community tab from `/community` to `/posts`;
+	// the old path now returns a "This Community isn't available" stub with no
+	// `backstagePostRenderer` blobs. `?hl=en` pins the locale.
+	return `https://www.youtube.com/@${normalizeHandle(handle)}/posts?hl=en`;
 }
 
 /** Parse the community post ID (`Ug…`) out of a post URL. */
@@ -183,7 +186,6 @@ export async function fetchCommunityPosts(
 				url,
 				formats: ["rawHtml"],
 				onlyMainContent: false,
-				proxy: "stealth",
 			}),
 		});
 	} catch (err) {
