@@ -10,10 +10,16 @@ import { log, warn, error, setWorkflowContext, Logger } from "./log";
 import { truncateGraphemes } from "./text";
 import { UNOFFICIAL_SUFFIX, RT_DISPLAY_PREFIX, RT_DISPLAY_SUFFIX, BIO_DISCLAIMER } from "./constants";
 import { normalizeChannelId } from "./handles";
+import { profileSourceSnapshot } from "./profile-source";
 
 export interface MirrorProfileWorkflowParams {
 	channelId: string;
 }
+
+type ProfileChange = "changed" | "unchanged";
+type ModerationCheck = "checked" | "not-due";
+
+const MODERATION_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export async function checkModerationLabels(
 	channelId: string,
@@ -47,11 +53,19 @@ export class MirrorProfileWorkflow extends WorkflowEntrypoint<Env, MirrorProfile
 			return config;
 		});
 
-		await stepDo<void>(step, `check-labels-${channelId}`, async () => {
+		await stepDo<ModerationCheck>(step, `check-labels-${channelId}`, async () => {
+			const checkKey = `profile-label-check:${channelId}`;
+			const lastCheckedAt = await this.env.KV.get(checkKey);
+			if (lastCheckedAt && Date.now() - new Date(lastCheckedAt).getTime() < MODERATION_CHECK_INTERVAL_MS) {
+				return "not-due";
+			}
+
 			await checkModerationLabels(channelId, [
 				{ role: "main", handle: channelConfig.main.atProtoAccount },
 				{ role: "rt", handle: channelConfig.rt.atProtoAccount },
 			]);
+			await this.env.KV.put(checkKey, new Date().toISOString());
+			return "checked";
 		});
 
 		const info = await stepDo<ChannelInfo | null>(step, `fetch-profile-${channelId}`, async () => {
@@ -61,6 +75,16 @@ export class MirrorProfileWorkflow extends WorkflowEntrypoint<Env, MirrorProfile
 
 		if (!info) {
 			warn({ tag: "sync-profile", channelId, message: `${channelId}: no channel info returned, skipping profile sync` });
+			return;
+		}
+
+		const sourceSnapshot = profileSourceSnapshot(info, channelConfig.bioSuffix);
+		const profileChange = await stepDo<ProfileChange>(step, `check-profile-change-${channelId}`, async () => {
+			const previousSnapshot = await this.env.KV.get(`profile-source:${channelId}`);
+			return previousSnapshot === sourceSnapshot ? "unchanged" : "changed";
+		});
+		if (profileChange === "unchanged") {
+			log({ tag: "sync-profile", channelId, message: `${channelId}: source profile unchanged, skipping Bluesky writes` });
 			return;
 		}
 
@@ -115,6 +139,10 @@ export class MirrorProfileWorkflow extends WorkflowEntrypoint<Env, MirrorProfile
 
 			await rtClient.updateProfile(fields);
 			log({ tag: "sync-profile", channelId, message: `${channelId}: RT profile updated` });
+		});
+
+		await stepDo<void>(step, `record-profile-source-${channelId}`, async () => {
+			await this.env.KV.put(`profile-source:${channelId}`, sourceSnapshot);
 		});
 	}
 }

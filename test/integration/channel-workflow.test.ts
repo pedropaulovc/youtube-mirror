@@ -73,4 +73,22 @@ describe.sequential("MirrorChannelWorkflow orchestration", () => {
 		const child = await env.ITEM_WORKFLOW.get(`item-${TEST_CHANNEL_ID}-video-${video.id}`);
 		expect(child).not.toBeNull();
 	}, 20_000);
+
+	it("skips the community scrape until its polling interval elapses", async () => {
+		const config = makeChannelConfig({ mirrorCommunity: true, mirrorComments: false });
+		await env.KV.put(`users:${TEST_CHANNEL_ID}`, JSON.stringify(config));
+		await env.KV.put(`community-last-checked:${TEST_CHANNEL_ID}`, new Date().toISOString());
+
+		const instanceId = `channel-community-gate-${Date.now()}`;
+		await using instance = await introspectWorkflowInstance(env.CHANNEL_WORKFLOW, instanceId);
+		await instance.modify(async (m) => {
+			await m.mockStepResult({ name: `youtube-token-${TEST_CHANNEL_ID}` }, "fake-token");
+			await m.mockStepResult({ name: `fetch-videos-${TEST_CHANNEL_ID}` }, []);
+		});
+
+		await env.CHANNEL_WORKFLOW.create({ id: instanceId, params: { channelId: TEST_CHANNEL_ID } });
+		const posts = await instance.waitForStepResult({ name: `fetch-community-${TEST_CHANNEL_ID}` });
+		expect(posts).toEqual([]);
+		await instance.waitForStatus("complete", { timeout: 8000 });
+	}, 20_000);
 });

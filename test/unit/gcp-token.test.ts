@@ -12,7 +12,23 @@ const ENV = {
 	OIDC_SIGNING_KEY: { get: async () => "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----" },
 	GCP_WORKLOAD_PROVIDER: "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/cloudflare-workers/providers/youtube-mirror-oidc",
 	GCP_SERVICE_ACCOUNT: "youtube-mirror-cf@youtube-mirror-501119.iam.gserviceaccount.com",
+	KV: null as unknown as KVNamespace,
 };
+
+const tokenStore = new Map<string, string>();
+
+function tokenKv(): KVNamespace {
+	return {
+		get: vi.fn(async (key: string, type?: string) => {
+			const value = tokenStore.get(key);
+			if (!value) return null;
+			return type === "json" ? JSON.parse(value) : value;
+		}),
+		put: vi.fn(async (key: string, value: string) => {
+			tokenStore.set(key, value);
+		}),
+	} as unknown as KVNamespace;
+}
 
 function stsOk() {
 	return new Response(JSON.stringify({ access_token: "federated-token" }), { status: 200 });
@@ -22,7 +38,11 @@ function impOk(token = "ya29.sa-access-token") {
 }
 
 describe("getYouTubeAccessToken", () => {
-	beforeEach(() => vi.resetModules()); // fresh module-level token cache per test
+	beforeEach(() => {
+		vi.resetModules();
+		tokenStore.clear();
+		ENV.KV = tokenKv();
+	});
 	afterEach(() => vi.restoreAllMocks());
 
 	it("exchanges an assertion at STS then impersonates the SA for a youtube.force-ssl token", async () => {
@@ -61,6 +81,21 @@ describe("getYouTubeAccessToken", () => {
 		await getYouTubeAccessToken(ENV);
 
 		expect(fetchMock).toHaveBeenCalledTimes(2); // STS + impersonation once, not twice
+	});
+
+	it("reuses the persisted token after a fresh module load", async () => {
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) =>
+			String(url).includes("sts.googleapis.com") ? stsOk() : impOk(),
+		);
+
+		const firstModule = await import("../../worker/gcp-token");
+		await firstModule.getYouTubeAccessToken(ENV);
+		vi.resetModules();
+		const freshModule = await import("../../worker/gcp-token");
+		await freshModule.getYouTubeAccessToken(ENV);
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(ENV.KV.get).toHaveBeenCalled();
 	});
 
 	it("throws when STS rejects the assertion", async () => {

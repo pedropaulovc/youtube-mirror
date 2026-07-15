@@ -11,6 +11,7 @@ import type { ChannelConfig, ChannelMeta, CommentItem, CommunityPostItem, Conten
 import { log, warn, setWorkflowContext, Logger } from "./log";
 import { normalizeChannelId } from "./handles";
 import { DEFAULT_MAX_ITEMS, MAX_ITEMS_LIMIT, MAX_COMMENT_VIDEOS, COMMENT_LOOKBACK_HOURS } from "./constants";
+import { communityPollState, DEFAULT_COMMUNITY_POLL_INTERVAL_MINUTES } from "./community-poll";
 
 export interface MirrorChannelWorkflowParams {
 	channelId: string;
@@ -54,9 +55,16 @@ export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannel
 		// Step 4: Community posts (Firecrawl) — best-effort, gated by config
 		if (channelConfig.mirrorCommunity !== false) {
 			const newPosts = await stepDo<CommunityPostItem[]>(step, `fetch-community-${channelId}`, async () => {
+				const lastCheckedKey = `community-last-checked:${channelId}`;
+				const lastCheckedAt = await this.env.KV.get(lastCheckedKey);
+				const interval = Math.max(1, channelConfig.communityPollIntervalMinutes ?? DEFAULT_COMMUNITY_POLL_INTERVAL_MINUTES);
+				if (communityPollState(lastCheckedAt, Date.now(), interval) === "not-due") return [];
+
 				const firecrawlToken = await this.env.FIRECRAWL_API_TOKEN.get();
 				const posts = await fetchCommunityPosts(channelConfig.handle, channelId, firecrawlToken);
-				return this.filterNew(channelId, posts);
+				const newPosts = await this.filterNew(channelId, posts);
+				await this.env.KV.put(lastCheckedKey, new Date().toISOString());
+				return newPosts;
 			});
 			for (const post of newPosts) {
 				await this.dispatchItem(channelId, channelConfig, post, workflowId);
@@ -82,12 +90,10 @@ export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannel
 
 	/** Keep only items with no existing `mirrored:` record. */
 	private async filterNew<T extends { id: string }>(channelId: string, items: T[]): Promise<T[]> {
-		const out: T[] = [];
-		for (const item of items) {
-			const existing = await this.env.KV.get(`mirrored:${channelId}:${item.id}`);
-			if (!existing) out.push(item);
-		}
-		return out;
+		const existingRecords = await Promise.all(
+			items.map((item) => this.env.KV.get(`mirrored:${channelId}:${item.id}`)),
+		);
+		return items.filter((_item, index) => !existingRecords[index]);
 	}
 
 	/** Returns true iff the item workflow was successfully created/queued. */
@@ -119,10 +125,13 @@ export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannel
 		const recent = videos
 			.filter((v) => new Date(v.publishedAt).getTime() >= cutoff)
 			.slice(0, MAX_COMMENT_VIDEOS);
+		const mirroredVideos = await Promise.all(
+			recent.map((video) => this.env.KV.get<MirroredRecord>(`mirrored:${channelId}:${video.id}`, "json")),
+		);
 
-		for (const video of recent) {
+		for (const [index, video] of recent.entries()) {
 			// Only poll comments once the video itself has been mirrored.
-			const videoRec = await this.env.KV.get<MirroredRecord>(`mirrored:${channelId}:${video.id}`, "json");
+			const videoRec = mirroredVideos[index];
 			if (!videoRec) continue;
 
 			const newComments = await stepDo<CommentItem[]>(step, `fetch-comments-${video.id}`, async () => {
