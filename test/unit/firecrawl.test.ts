@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { communityTabUrl, postIdFromUrl, parseCommunityPosts, fetchCommunityPosts } from "../../worker/firecrawl";
+import { communityTabUrl, postIdFromUrl, parseCommunityPosts, fetchCommunityPosts, fetchCommunityPostsResult } from "../../worker/firecrawl";
 import { TEST_CHANNEL_ID } from "../helpers/factories";
 
 // Build a page whose embedded ytInitialData contains the given backstagePostRenderers.
@@ -101,6 +101,24 @@ describe("firecrawl", () => {
 		it("returns [] on a non-OK response without throwing", async () => {
 			vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 500 }));
 			await expect(fetchCommunityPosts("mychannel", TEST_CHANNEL_ID, "fc-token")).resolves.toEqual([]);
+		});
+
+		it("reports a failed scrape separately from a successful empty feed", async () => {
+			vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 500 }));
+			await expect(fetchCommunityPostsResult("mychannel", TEST_CHANNEL_ID, "fc-token")).resolves.toEqual({
+				state: "failed",
+				posts: [],
+			});
+		});
+
+		it("reports HTML without ytInitialData as a failed scrape", async () => {
+			vi.spyOn(globalThis, "fetch").mockResolvedValue(
+				new Response(JSON.stringify({ data: { rawHtml: "<html>consent required</html>" } }), { status: 200 }),
+			);
+			await expect(fetchCommunityPostsResult("mychannel", TEST_CHANNEL_ID, "fc-token")).resolves.toEqual({
+				state: "failed",
+				posts: [],
+			});
 		});
 	});
 });

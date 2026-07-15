@@ -34,6 +34,7 @@ export interface ChannelConfig {
 	uploadsPlaylistId?: string;
 	maxItems?: number; // videos+community fetched per poll (default 15, max 50)
 	pollIntervalMinutes?: number; // default 15, min 1
+	communityPollIntervalMinutes?: number; // default 60, min 1
 	bioSuffix?: string; // custom bio suffix (replaces BIO_DISCLAIMER when set)
 	mirrorComments?: boolean; // default true
 	mirrorCommunity?: boolean; // default true

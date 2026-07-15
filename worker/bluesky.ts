@@ -389,8 +389,10 @@ async function fetchWithTimeout(url: string, ms: number): Promise<Response | nul
 	}
 }
 
+export type LookupFailureMode = "best-effort" | "strict";
+
 /** Resolve a Bluesky handle to a DID via the public API. Null if unresolvable. */
-export async function resolveHandleToDid(handle: string): Promise<string | null> {
+export async function resolveHandleToDid(handle: string, failureMode: LookupFailureMode = "best-effort"): Promise<string | null> {
 	const url = `${BLUESKY_PUBLIC_API}/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`;
 	for (let attempt = 0; attempt < 3; attempt++) {
 		const res = await fetchWithTimeout(url, 5000);
@@ -401,17 +403,21 @@ export async function resolveHandleToDid(handle: string): Promise<string | null>
 		if (res && res.status === 400) return null; // permanent: invalid/unknown handle
 		if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
 	}
+	if (failureMode === "strict") throw new Error(`Bluesky handle resolution failed transiently for ${handle}`);
 	return null;
 }
 
 /** Query moderation labels for a DID from Bluesky's official labeler. */
-export async function queryModerationLabels(did: string): Promise<ModerationLabel[]> {
+export async function queryModerationLabels(did: string, failureMode: LookupFailureMode = "best-effort"): Promise<ModerationLabel[]> {
 	const params = new URLSearchParams({ uriPatterns: did, sources: BLUESKY_LABELER_DID });
 	const res = await fetchWithTimeout(
 		`${BLUESKY_PUBLIC_API}/xrpc/com.atproto.label.queryLabels?${params}`,
 		5000,
 	);
-	if (!res || !res.ok) return [];
+	if (!res || !res.ok) {
+		if (failureMode === "strict") throw new Error(`Bluesky moderation label query failed for ${did}`);
+		return [];
+	}
 	const data = await res.json<{ labels: ModerationLabel[] }>();
 	return data.labels;
 }

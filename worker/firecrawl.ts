@@ -141,11 +141,7 @@ export function normalizeBackstagePost(renderer: JsonObject, channelId: string):
 	};
 }
 
-/** Parse all community posts out of a YouTube community-tab page's raw HTML. */
-export function parseCommunityPosts(html: string, channelId: string): CommunityPostItem[] {
-	const data = extractYtInitialData(html);
-	if (!data) return [];
-
+function normalizeCommunityPosts(data: unknown, channelId: string): CommunityPostItem[] {
 	const renderers: JsonObject[] = [];
 	collectRenderers(data, "backstagePostRenderer", renderers);
 
@@ -161,6 +157,13 @@ export function parseCommunityPosts(html: string, channelId: string): CommunityP
 	return posts;
 }
 
+/** Parse all community posts out of a YouTube community-tab page's raw HTML. */
+export function parseCommunityPosts(html: string, channelId: string): CommunityPostItem[] {
+	const data = extractYtInitialData(html);
+	if (!data) return [];
+	return normalizeCommunityPosts(data, channelId);
+}
+
 /**
  * Scrape a channel's community tab via Firecrawl and return normalized posts.
  * Requests raw HTML only (no LLM extraction) and parses `ytInitialData` locally.
@@ -172,6 +175,20 @@ export async function fetchCommunityPosts(
 	channelId: string,
 	apiKey: string,
 ): Promise<CommunityPostItem[]> {
+	const result = await fetchCommunityPostsResult(handle, channelId, apiKey);
+	return result.posts;
+}
+
+export interface CommunityPostsResult {
+	state: "success" | "failed";
+	posts: CommunityPostItem[];
+}
+
+export async function fetchCommunityPostsResult(
+	handle: string,
+	channelId: string,
+	apiKey: string,
+): Promise<CommunityPostsResult> {
 	const url = communityTabUrl(handle);
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), FIRECRAWL_TIMEOUT_MS);
@@ -190,22 +207,28 @@ export async function fetchCommunityPosts(
 		});
 	} catch (err) {
 		warn({ tag: "yt-community", handle, message: `Firecrawl scrape threw for ${url}`, error: String(err) });
-		return [];
+		return { state: "failed", posts: [] };
 	} finally {
 		clearTimeout(timeout);
 	}
 
 	if (!response.ok) {
 		warn({ tag: "yt-community", handle, status: response.status, message: `Firecrawl scrape non-OK for ${url}` });
-		return [];
+		return { state: "failed", posts: [] };
 	}
 
 	const json = (await response.json().catch(() => null)) as { data?: { rawHtml?: string } } | null;
 	const html = json?.data?.rawHtml;
 	if (!html) {
 		verbose({ tag: "yt-community", handle, message: `Firecrawl returned no HTML for ${url}` });
-		return [];
+		return { state: "failed", posts: [] };
 	}
 
-	return parseCommunityPosts(html, channelId);
+	const data = extractYtInitialData(html);
+	if (!data) {
+		warn({ tag: "yt-community", handle, message: `YouTube page had no parseable ytInitialData for ${url}` });
+		return { state: "failed", posts: [] };
+	}
+
+	return { state: "success", posts: normalizeCommunityPosts(data, channelId) };
 }

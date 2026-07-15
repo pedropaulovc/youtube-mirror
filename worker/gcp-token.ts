@@ -1,4 +1,5 @@
 import { signAssertion } from "./oidc-sign";
+import { warn } from "./log";
 
 // Obtain a YouTube-scoped Google access token via Workload Identity Federation,
 // so the workers call the Data API with an `Authorization: Bearer` header instead
@@ -23,13 +24,27 @@ interface GcpTokenEnv {
   OIDC_SIGNING_KEY: { get(): Promise<string> };
   GCP_WORKLOAD_PROVIDER: string;
   GCP_SERVICE_ACCOUNT: string;
+  KV: KVNamespace;
 }
 
 let cache: { token: string; expiresAt: number } | null = null;
 
+function tokenCacheKey(serviceAccount: string): string {
+  return `gcp-token:${serviceAccount}`;
+}
+
 export async function getYouTubeAccessToken(env: GcpTokenEnv): Promise<string> {
   if (cache && Date.now() < cache.expiresAt) {
     return cache.token;
+  }
+
+  const persisted = await env.KV.get<{ token: string; expiresAt: number }>(
+    tokenCacheKey(env.GCP_SERVICE_ACCOUNT),
+    "json",
+  );
+  if (persisted && Date.now() < persisted.expiresAt) {
+    cache = persisted;
+    return persisted.token;
   }
 
   const assertion = await signAssertion({
@@ -84,5 +99,13 @@ export async function getYouTubeAccessToken(env: GcpTokenEnv): Promise<string> {
     ? new Date(imp.expireTime).getTime() - 60_000
     : Date.now() + 30 * 60_000;
   cache = { token: imp.accessToken, expiresAt };
+  const expirationTtl = Math.max(60, Math.floor((expiresAt - Date.now()) / 1000));
+  try {
+    await env.KV.put(tokenCacheKey(env.GCP_SERVICE_ACCOUNT), JSON.stringify(cache), {
+      expirationTtl,
+    });
+  } catch (err) {
+    warn({ tag: "gcp-token", message: "Could not persist access token cache", error: String(err) });
+  }
   return cache.token;
 }
