@@ -28,7 +28,14 @@ export async function createWorkflowWithRetry(
 ): Promise<void> {
 	for (let attempt = 0; ; attempt++) {
 		try {
-			await workflow.create({ id, params });
+			await workflow.create({
+				id,
+				params,
+				retention: {
+					successRetention: "1 day",
+					errorRetention: "1 day",
+				},
+			});
 			return;
 		} catch (err) {
 			if (isAlreadyExists(err)) return await reconcileExisting(workflow, id);

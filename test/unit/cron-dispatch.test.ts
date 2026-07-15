@@ -19,8 +19,17 @@ const alreadyExists = () => Promise.reject(new Error("instance with id X already
 
 describe("createWorkflowWithRetry", () => {
 	it("creates the instance and does not touch existing ones on success", async () => {
-		const { workflow, get, restart } = fakeWorkflow({ create: async () => ({}) });
+		const create = vi.fn(async () => ({}));
+		const { workflow, get, restart } = fakeWorkflow({ create });
 		await createWorkflowWithRetry(workflow, "id-1", { a: 1 });
+		expect(create).toHaveBeenCalledWith({
+			id: "id-1",
+			params: { a: 1 },
+			retention: {
+				successRetention: "1 day",
+				errorRetention: "1 day",
+			},
+		});
 		expect(get).not.toHaveBeenCalled();
 		expect(restart).not.toHaveBeenCalled();
 	});
