@@ -141,11 +141,7 @@ export function normalizeBackstagePost(renderer: JsonObject, channelId: string):
 	};
 }
 
-/** Parse all community posts out of a YouTube community-tab page's raw HTML. */
-export function parseCommunityPosts(html: string, channelId: string): CommunityPostItem[] {
-	const data = extractYtInitialData(html);
-	if (!data) return [];
-
+function normalizeCommunityPosts(data: unknown, channelId: string): CommunityPostItem[] {
 	const renderers: JsonObject[] = [];
 	collectRenderers(data, "backstagePostRenderer", renderers);
 
@@ -159,6 +155,13 @@ export function parseCommunityPosts(html: string, channelId: string): CommunityP
 		}
 	}
 	return posts;
+}
+
+/** Parse all community posts out of a YouTube community-tab page's raw HTML. */
+export function parseCommunityPosts(html: string, channelId: string): CommunityPostItem[] {
+	const data = extractYtInitialData(html);
+	if (!data) return [];
+	return normalizeCommunityPosts(data, channelId);
 }
 
 /**
@@ -221,5 +224,11 @@ export async function fetchCommunityPostsResult(
 		return { state: "failed", posts: [] };
 	}
 
-	return { state: "success", posts: parseCommunityPosts(html, channelId) };
+	const data = extractYtInitialData(html);
+	if (!data) {
+		warn({ tag: "yt-community", handle, message: `YouTube page had no parseable ytInitialData for ${url}` });
+		return { state: "failed", posts: [] };
+	}
+
+	return { state: "success", posts: normalizeCommunityPosts(data, channelId) };
 }

@@ -110,5 +110,15 @@ describe("firecrawl", () => {
 				posts: [],
 			});
 		});
+
+		it("reports HTML without ytInitialData as a failed scrape", async () => {
+			vi.spyOn(globalThis, "fetch").mockResolvedValue(
+				new Response(JSON.stringify({ data: { rawHtml: "<html>consent required</html>" } }), { status: 200 }),
+			);
+			await expect(fetchCommunityPostsResult("mychannel", TEST_CHANNEL_ID, "fc-token")).resolves.toEqual({
+				state: "failed",
+				posts: [],
+			});
+		});
 	});
 });

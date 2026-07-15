@@ -88,7 +88,7 @@ describe.sequential("MirrorChannelWorkflow orchestration", () => {
 
 		await env.CHANNEL_WORKFLOW.create({ id: instanceId, params: { channelId: TEST_CHANNEL_ID } });
 		const posts = await instance.waitForStepResult({ name: `fetch-community-${TEST_CHANNEL_ID}` });
-		expect(posts).toEqual([]);
+		expect(posts).toEqual({ state: "not-due", posts: [] });
 		await instance.waitForStatus("complete", { timeout: 8000 });
 	}, 20_000);
 });

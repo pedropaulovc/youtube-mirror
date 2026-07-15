@@ -98,6 +98,19 @@ describe("getYouTubeAccessToken", () => {
 		expect(ENV.KV.get).toHaveBeenCalled();
 	});
 
+	it("returns a valid token when the optional KV cache write fails", async () => {
+		ENV.KV = {
+			...tokenKv(),
+			put: vi.fn().mockRejectedValue(new Error("KV unavailable")),
+		} as unknown as KVNamespace;
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) =>
+			String(url).includes("sts.googleapis.com") ? stsOk() : impOk(),
+		);
+
+		const { getYouTubeAccessToken } = await import("../../worker/gcp-token");
+		await expect(getYouTubeAccessToken(ENV)).resolves.toBe("ya29.sa-access-token");
+	});
+
 	it("throws when STS rejects the assertion", async () => {
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response(JSON.stringify({ error: "invalid_grant", error_description: "bad audience" }), { status: 400 }),

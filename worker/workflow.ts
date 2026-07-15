@@ -17,6 +17,11 @@ export interface MirrorChannelWorkflowParams {
 	channelId: string;
 }
 
+interface CommunityFetchResult {
+	state: "not-due" | "failed" | "success";
+	posts: CommunityPostItem[];
+}
+
 export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannelWorkflowParams> {
 	logger: Logger | undefined;
 
@@ -54,21 +59,30 @@ export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannel
 
 		// Step 4: Community posts (Firecrawl) — best-effort, gated by config
 		if (channelConfig.mirrorCommunity !== false) {
-			const newPosts = await stepDo<CommunityPostItem[]>(step, `fetch-community-${channelId}`, async () => {
+			const community = await stepDo<CommunityFetchResult>(step, `fetch-community-${channelId}`, async () => {
 				const lastCheckedKey = `community-last-checked:${channelId}`;
 				const lastCheckedAt = await this.env.KV.get(lastCheckedKey);
 				const interval = Math.max(1, channelConfig.communityPollIntervalMinutes ?? DEFAULT_COMMUNITY_POLL_INTERVAL_MINUTES);
-				if (communityPollState(lastCheckedAt, Date.now(), interval) === "not-due") return [];
+				if (communityPollState(lastCheckedAt, Date.now(), interval) === "not-due") {
+					return { state: "not-due", posts: [] };
+				}
 
 				const firecrawlToken = await this.env.FIRECRAWL_API_TOKEN.get();
 				const result = await fetchCommunityPostsResult(channelConfig.handle, channelId, firecrawlToken);
-				if (result.state === "failed") return [];
+				if (result.state === "failed") return { state: "failed", posts: [] };
 				const newPosts = await this.filterNew(channelId, result.posts);
-				await this.env.KV.put(lastCheckedKey, new Date().toISOString());
-				return newPosts;
+				return { state: "success", posts: newPosts };
 			});
-			for (const post of newPosts) {
-				await this.dispatchItem(channelId, channelConfig, post, workflowId);
+
+			let dispatchState: "complete" | "failed" = "complete";
+			for (const post of community.posts) {
+				const dispatched = await this.dispatchItem(channelId, channelConfig, post, workflowId);
+				if (!dispatched) dispatchState = "failed";
+			}
+			if (community.state === "success" && dispatchState === "complete") {
+				await stepDo<void>(step, `record-community-check-${channelId}`, async () => {
+					await this.env.KV.put(`community-last-checked:${channelId}`, new Date().toISOString());
+				});
 			}
 		}
 
