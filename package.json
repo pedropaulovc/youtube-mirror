@@ -22,7 +22,7 @@
     "compromise": "^14.15.0"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.13.0",
+    "@cloudflare/vitest-pool-workers": "^0.18.2",
     "@eslint/js": "^9.39.4",
     "@types/node": "^26.1.0",
     "eslint": "^9.32.0",
