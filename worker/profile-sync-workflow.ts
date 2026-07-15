@@ -18,6 +18,7 @@ export interface MirrorProfileWorkflowParams {
 
 type ProfileChange = "changed" | "unchanged";
 type ModerationCheck = "checked" | "not-due";
+type ProfileUpdate = "complete" | "partial";
 
 const MODERATION_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -88,7 +89,7 @@ export class MirrorProfileWorkflow extends WorkflowEntrypoint<Env, MirrorProfile
 			return;
 		}
 
-		await stepDo<void>(step, `update-profile-${channelId}`, async () => {
+		const mainUpdate = await stepDo<ProfileUpdate>(step, `update-profile-${channelId}`, async () => {
 			const mainClient = await getAuthenticatedClient(
 				this.env.KV,
 				this.env as unknown as { [key: string]: SecretsStoreSecret },
@@ -96,6 +97,7 @@ export class MirrorProfileWorkflow extends WorkflowEntrypoint<Env, MirrorProfile
 			);
 
 			const fields: Parameters<typeof mainClient.updateProfile>[0] = {};
+			let updateState: ProfileUpdate = "complete";
 			if (info.title) {
 				const maxNameLen = 64 - [...UNOFFICIAL_SUFFIX].length;
 				fields.displayName = truncateGraphemes(info.title, maxNameLen) + UNOFFICIAL_SUFFIX;
@@ -109,6 +111,7 @@ export class MirrorProfileWorkflow extends WorkflowEntrypoint<Env, MirrorProfile
 				try {
 					fields.avatar = await mainClient.uploadBlobFromUrl(info.avatarUrl);
 				} catch (err) {
+					updateState = "partial";
 					warn({ tag: "sync-profile", channelId, message: `${channelId}: failed to upload avatar`, error: String(err) });
 				}
 			}
@@ -116,12 +119,14 @@ export class MirrorProfileWorkflow extends WorkflowEntrypoint<Env, MirrorProfile
 				try {
 					fields.banner = await mainClient.uploadBlobFromUrl(info.bannerUrl);
 				} catch (err) {
+					updateState = "partial";
 					warn({ tag: "sync-profile", channelId, message: `${channelId}: failed to upload banner`, error: String(err) });
 				}
 			}
 
 			await mainClient.updateProfile(fields);
 			log({ tag: "sync-profile", channelId, message: `${channelId}: profile updated` });
+			return updateState;
 		});
 
 		await stepDo<void>(step, `update-rt-profile-${channelId}`, async () => {
@@ -141,8 +146,10 @@ export class MirrorProfileWorkflow extends WorkflowEntrypoint<Env, MirrorProfile
 			log({ tag: "sync-profile", channelId, message: `${channelId}: RT profile updated` });
 		});
 
-		await stepDo<void>(step, `record-profile-source-${channelId}`, async () => {
-			await this.env.KV.put(`profile-source:${channelId}`, sourceSnapshot);
-		});
+		if (mainUpdate === "complete") {
+			await stepDo<void>(step, `record-profile-source-${channelId}`, async () => {
+				await this.env.KV.put(`profile-source:${channelId}`, sourceSnapshot);
+			});
+		}
 	}
 }
