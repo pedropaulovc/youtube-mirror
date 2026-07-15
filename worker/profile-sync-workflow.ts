@@ -27,12 +27,12 @@ export async function checkModerationLabels(
 	accounts: ReadonlyArray<{ role: "main" | "rt"; handle: string }>,
 ): Promise<void> {
 	for (const { role, handle } of accounts) {
-		const did = await resolveHandleToDid(handle);
+		const did = await resolveHandleToDid(handle, "strict");
 		if (!did) {
 			warn({ tag: "moderation-label", channelId, account: role, bskyHandle: handle, message: `${channelId}: could not resolve DID for ${handle}` });
 			continue;
 		}
-		const labels = await queryModerationLabels(did);
+		const labels = await queryModerationLabels(did, "strict");
 		for (const label of labels) {
 			error({ tag: "moderation-label", channelId, account: role, bskyHandle: handle, did, label: label.val, labelExpires: label.exp ?? "never", labelCreated: label.cts, message: `${channelId}: ${role} account ${handle} has moderation label "${label.val}" (expires ${label.exp ?? "never"})` });
 		}
@@ -79,7 +79,10 @@ export class MirrorProfileWorkflow extends WorkflowEntrypoint<Env, MirrorProfile
 			return;
 		}
 
-		const sourceSnapshot = profileSourceSnapshot(info, channelConfig.bioSuffix);
+		const sourceSnapshot = profileSourceSnapshot(info, {
+			main: channelConfig.main.atProtoAccount,
+			rt: channelConfig.rt.atProtoAccount,
+		}, channelConfig.bioSuffix);
 		const profileChange = await stepDo<ProfileChange>(step, `check-profile-change-${channelId}`, async () => {
 			const previousSnapshot = await this.env.KV.get(`profile-source:${channelId}`);
 			return previousSnapshot === sourceSnapshot ? "unchanged" : "changed";

@@ -10,9 +10,11 @@ describe("profileSourceSnapshot", () => {
 			bannerUrl: "https://example.com/banner.jpg",
 		};
 
-		const initial = profileSourceSnapshot(info);
-		expect(profileSourceSnapshot({ ...info })).toBe(initial);
-		expect(profileSourceSnapshot({ ...info, title: "Renamed channel" })).not.toBe(initial);
-		expect(profileSourceSnapshot(info, " custom suffix")).not.toBe(initial);
+		const targets = { main: "main.example", rt: "rt.example" };
+		const initial = profileSourceSnapshot(info, targets);
+		expect(profileSourceSnapshot({ ...info }, targets)).toBe(initial);
+		expect(profileSourceSnapshot({ ...info, title: "Renamed channel" }, targets)).not.toBe(initial);
+		expect(profileSourceSnapshot(info, targets, " custom suffix")).not.toBe(initial);
+		expect(profileSourceSnapshot(info, { ...targets, main: "replacement.example" })).not.toBe(initial);
 	});
 });

@@ -172,6 +172,20 @@ export async function fetchCommunityPosts(
 	channelId: string,
 	apiKey: string,
 ): Promise<CommunityPostItem[]> {
+	const result = await fetchCommunityPostsResult(handle, channelId, apiKey);
+	return result.posts;
+}
+
+export interface CommunityPostsResult {
+	state: "success" | "failed";
+	posts: CommunityPostItem[];
+}
+
+export async function fetchCommunityPostsResult(
+	handle: string,
+	channelId: string,
+	apiKey: string,
+): Promise<CommunityPostsResult> {
 	const url = communityTabUrl(handle);
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), FIRECRAWL_TIMEOUT_MS);
@@ -190,22 +204,22 @@ export async function fetchCommunityPosts(
 		});
 	} catch (err) {
 		warn({ tag: "yt-community", handle, message: `Firecrawl scrape threw for ${url}`, error: String(err) });
-		return [];
+		return { state: "failed", posts: [] };
 	} finally {
 		clearTimeout(timeout);
 	}
 
 	if (!response.ok) {
 		warn({ tag: "yt-community", handle, status: response.status, message: `Firecrawl scrape non-OK for ${url}` });
-		return [];
+		return { state: "failed", posts: [] };
 	}
 
 	const json = (await response.json().catch(() => null)) as { data?: { rawHtml?: string } } | null;
 	const html = json?.data?.rawHtml;
 	if (!html) {
 		verbose({ tag: "yt-community", handle, message: `Firecrawl returned no HTML for ${url}` });
-		return [];
+		return { state: "failed", posts: [] };
 	}
 
-	return parseCommunityPosts(html, channelId);
+	return { state: "success", posts: parseCommunityPosts(html, channelId) };
 }

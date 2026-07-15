@@ -2,7 +2,7 @@ import { WorkflowEntrypoint, WorkflowStep } from "cloudflare:workers";
 import type { WorkflowEvent } from "cloudflare:workers";
 import { fetchRecentVideoIds, fetchVideos, fetchComments, uploadsPlaylistId } from "./youtube-api";
 import { getYouTubeAccessToken } from "./gcp-token";
-import { fetchCommunityPosts } from "./firecrawl";
+import { fetchCommunityPostsResult } from "./firecrawl";
 import { createWorkflowWithRetry } from "./cron-dispatch";
 import { safeCommentCursor } from "./comment-cursor";
 import { stepDo } from "./step";
@@ -61,8 +61,9 @@ export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannel
 				if (communityPollState(lastCheckedAt, Date.now(), interval) === "not-due") return [];
 
 				const firecrawlToken = await this.env.FIRECRAWL_API_TOKEN.get();
-				const posts = await fetchCommunityPosts(channelConfig.handle, channelId, firecrawlToken);
-				const newPosts = await this.filterNew(channelId, posts);
+				const result = await fetchCommunityPostsResult(channelConfig.handle, channelId, firecrawlToken);
+				if (result.state === "failed") return [];
+				const newPosts = await this.filterNew(channelId, result.posts);
 				await this.env.KV.put(lastCheckedKey, new Date().toISOString());
 				return newPosts;
 			});
