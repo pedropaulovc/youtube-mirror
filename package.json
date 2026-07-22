@@ -31,7 +31,7 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.62.1",
-    "vitest": "^4.0.18",
+    "vitest": "^4.1.10",
     "wrangler": "^4.73.0"
   },
   "engines": {
