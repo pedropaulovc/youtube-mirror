@@ -226,7 +226,6 @@ async function createAccountViaPlaywright(
 
 	log("register", `Creating ${label} account: ${handle}.${PDS_HOST}`);
 	log("register", `  Email: ${email}`);
-	log("register", `  Password: ${password}`);
 	log("register", "");
 
 	const browser = await chromium.launch({ headless: false });
@@ -262,7 +261,7 @@ async function createAccountViaPlaywright(
 
 	log("register", "Step 2/3: Setting handle...");
 	await page.getByText("Choose your username").waitFor({ timeout: 15_000 });
-	const handleInput = page.getByRole("textbox", { name: `.${PDS_HOST}` });
+	const handleInput = page.getByTestId("handleInput");
 	await handleInput.waitFor({ timeout: 5_000 });
 	await handleInput.fill(handle);
 	await page.waitForTimeout(3000);
