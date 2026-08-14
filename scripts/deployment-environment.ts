@@ -1,4 +1,5 @@
 export type DeploymentEnvironmentName = "production" | "ppe";
+export type EnvironmentSource = Readonly<Record<string, string | undefined>>;
 
 export interface PublicRsaJwk {
 	kty: "RSA";
@@ -50,26 +51,26 @@ export const REQUIRED_SECRET_NAMES = (channelIds: readonly string[]): readonly s
 	]),
 ];
 
-function requireValue(source: NodeJS.ProcessEnv, name: string): string {
+function requireValue(source: EnvironmentSource, name: string): string {
 	const value = source[name]?.trim();
 	if (!value) throw new Error(`Required environment variable ${name} is not set`);
 	return value;
 }
 
-function requireHexId(source: NodeJS.ProcessEnv, name: string): string {
+function requireHexId(source: EnvironmentSource, name: string): string {
 	const value = requireValue(source, name);
 	if (!HEX_ID.test(value)) throw new Error(`${name} must be a 32-character lowercase hexadecimal Cloudflare ID`);
 	return value;
 }
 
-function requireUuid(source: NodeJS.ProcessEnv, name: string): string {
+function requireUuid(source: EnvironmentSource, name: string): string {
 	const value = requireValue(source, name);
 	if (!UUID.test(value)) throw new Error(`${name} must be a UUID`);
 	return value;
 }
 
 function requireOrigin(
-	source: NodeJS.ProcessEnv,
+	source: EnvironmentSource,
 	name: string,
 	workerName: string,
 	workersDevSubdomain: string,
@@ -90,7 +91,7 @@ function requireOrigin(
 	return url.origin;
 }
 
-function requireHttpsUrl(source: NodeJS.ProcessEnv, name: string): string {
+function requireHttpsUrl(source: EnvironmentSource, name: string): string {
 	const value = requireValue(source, name);
 	let url: URL;
 	try {
@@ -104,7 +105,7 @@ function requireHttpsUrl(source: NodeJS.ProcessEnv, name: string): string {
 	return url.toString();
 }
 
-function parsePublicJwk(source: NodeJS.ProcessEnv, kid: string): PublicRsaJwk {
+function parsePublicJwk(source: EnvironmentSource, kid: string): PublicRsaJwk {
 	let value: unknown;
 	try {
 		value = JSON.parse(requireValue(source, "OIDC_PUBLIC_JWK"));
@@ -137,7 +138,7 @@ function parsePublicJwk(source: NodeJS.ProcessEnv, kid: string): PublicRsaJwk {
 	};
 }
 
-function parseChannelIds(source: NodeJS.ProcessEnv): readonly string[] {
+function parseChannelIds(source: EnvironmentSource): readonly string[] {
 	const values = requireValue(source, "MIRROR_CHANNEL_IDS")
 		.split(",")
 		.map((value) => value.trim())
@@ -149,7 +150,7 @@ function parseChannelIds(source: NodeJS.ProcessEnv): readonly string[] {
 	return unique;
 }
 
-function parseSchedules(source: NodeJS.ProcessEnv): boolean {
+function parseSchedules(source: EnvironmentSource): boolean {
 	const value = requireValue(source, "ENABLE_SCHEDULES");
 	if (value !== "true" && value !== "false") {
 		throw new Error("ENABLE_SCHEDULES must be exactly true or false");
@@ -158,7 +159,7 @@ function parseSchedules(source: NodeJS.ProcessEnv): boolean {
 }
 
 export function parseDeploymentEnvironment(
-	source: NodeJS.ProcessEnv = process.env,
+	source: EnvironmentSource = process.env,
 	expected?: DeploymentEnvironmentName,
 ): DeploymentEnvironment {
 	const name = requireValue(source, "DEPLOY_ENVIRONMENT");

@@ -5,7 +5,7 @@ import {
 	type DeploymentEnvironmentName,
 } from "../../scripts/deployment-environment";
 
-function environment(name: DeploymentEnvironmentName): NodeJS.ProcessEnv {
+function environment(name: DeploymentEnvironmentName): Record<string, string | undefined> {
 	const subdomain = name === "production" ? "youtube-prod" : "youtube-ppe";
 	const kid = `${name}-key12345`;
 	return {
@@ -34,7 +34,7 @@ function environment(name: DeploymentEnvironmentName): NodeJS.ProcessEnv {
 		OTLP_LOGS_ENDPOINT: "https://monitor.example/v1/logs",
 		MIRROR_CHANNEL_IDS: "UC5NO8MgTQKHAWXp6z8Xl7yQ",
 		ENABLE_SCHEDULES: "false",
-	} as NodeJS.ProcessEnv;
+	};
 }
 
 describe("parseDeploymentEnvironment", () => {
