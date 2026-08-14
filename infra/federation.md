@@ -14,7 +14,7 @@ secrets are the `OIDC_SIGNING_KEY` Secrets Store entry (RSA private key) and the
 - Worker: `youtube-mirror-oidc-issuer` (`worker/oidc-issuer.ts`)
 - Issuer URL: `https://youtube-mirror-oidc-issuer.pedro-18e.workers.dev`
 - Serves `/.well-known/openid-configuration` and `/.well-known/jwks.json`
-- Signing key id (kid): `03c90718` — must match `OIDC_SIGNING_KID` on minting workers
+- Signing key id (kid): `eba00790` — must match `OIDC_SIGNING_KID` on minting workers
 - Public key lives in `worker/oidc-issuer.ts`; private key is the `OIDC_SIGNING_KEY` Secrets Store entry
 
 ## Azure (telemetry → Azure Monitor DCR)

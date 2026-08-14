@@ -1,51 +1,116 @@
-// Standalone OIDC issuer for Cloudflare-worker → cloud federation.
-//
-// Publishes the discovery document + JWKS that external token services fetch to
-// validate the self-signed client assertions our workers mint:
-//   - Azure Entra (telemetry gateway → Azure Monitor DCR)
-//   - GCP STS (YouTube Data API access via Workload Identity Federation)
-//
-// This worker holds ONLY the public key. Signing happens in the workers that mint
-// tokens (they read the private key from the OIDC_SIGNING_KEY Secrets Store entry). The kid
-// here must match the kid those workers stamp in their JWT header.
+// Standalone OIDC issuer for Cloudflare Worker federation.
+// The selected GitHub Environment supplies this Worker with its public key. The
+// matching private key stays in that environment's Cloudflare Secrets Store.
 
 interface Env {
-  ISSUER_URL: string;
+	DEPLOYMENT_ENVIRONMENT: "production" | "ppe";
+	ISSUER_URL: string;
+	OIDC_PUBLIC_JWK: string;
+	OIDC_SIGNING_KID: string;
 }
 
-const PUBLIC_JWK = {
-  kty: "RSA",
-  kid: "03c90718",
-  n: "2vvv7F-W8HekKbKG60LaSaEXKI1kkU3a9KX-4J58gLrMBJ66IEN8X9f01sggiU2BAwqCq-ul9e4XAhGqCk16oyavUFFD9K_1ylc2RcRNnttZpeD3gc7rT5L5KV21ILZvEz2ceDIfoZdIKDG-Of-EpEYHOiLzxxwnDgDD8KhRqLyirbi31koHhCGna91KP0JcAv9pDlZR-E6pIcwuq11I35IQ0zrJJlsBC3e1GUYHbQOjuK4ZiWmBUjPtZt2LExH6oSYxtDWFEtmMulKamYWpn-__SdII6KYjgWdd2JU8SAEr3V1iYYk_LB3D4wYCpxxUXxnBfewJS7vlWDhlh-EDKQ",
-  e: "AQAB",
-  alg: "RS256",
-  use: "sig",
-};
+interface PublicJwk {
+	kty: "RSA";
+	kid: string;
+	n: string;
+	e: string;
+	alg: "RS256";
+	use: "sig";
+}
+
+interface IssuerConfiguration {
+	issuerUrl: string;
+	jwk: PublicJwk;
+}
+
+let cachedSource: string | undefined;
+let cachedConfiguration: IssuerConfiguration | undefined;
+
+function configuration(env: Env): IssuerConfiguration {
+	const source = `${env.DEPLOYMENT_ENVIRONMENT}\u0000${env.ISSUER_URL}\u0000${env.OIDC_SIGNING_KID}\u0000${env.OIDC_PUBLIC_JWK}`;
+	if (source === cachedSource && cachedConfiguration) return cachedConfiguration;
+	if (env.DEPLOYMENT_ENVIRONMENT !== "production" && env.DEPLOYMENT_ENVIRONMENT !== "ppe") {
+		throw new Error("Invalid deployment environment");
+	}
+
+	let issuer: URL;
+	try {
+		issuer = new URL(env.ISSUER_URL);
+	} catch {
+		throw new Error("Invalid OIDC issuer URL");
+	}
+	if (
+		issuer.protocol !== "https:" ||
+		issuer.origin !== env.ISSUER_URL ||
+		!issuer.hostname.startsWith("youtube-mirror-oidc-issuer.") ||
+		!issuer.hostname.endsWith(".workers.dev")
+	) {
+		throw new Error("OIDC issuer URL must be this Worker's workers.dev HTTPS origin");
+	}
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(env.OIDC_PUBLIC_JWK);
+	} catch {
+		throw new Error("OIDC public JWK is not valid JSON");
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new Error("OIDC public JWK is not an object");
+	}
+	const jwk = parsed as Record<string, unknown>;
+	if (
+		jwk.kty !== "RSA" ||
+		jwk.kid !== env.OIDC_SIGNING_KID ||
+		jwk.alg !== "RS256" ||
+		jwk.use !== "sig" ||
+		typeof jwk.n !== "string" ||
+		jwk.n.length < 256 ||
+		typeof jwk.e !== "string" ||
+		jwk.e.length === 0
+	) {
+		throw new Error("OIDC public JWK does not match the configured RS256 signing kid");
+	}
+
+	cachedSource = source;
+	cachedConfiguration = {
+		issuerUrl: issuer.origin,
+		jwk: {
+			kty: "RSA",
+			kid: env.OIDC_SIGNING_KID,
+			n: jwk.n,
+			e: jwk.e,
+			alg: "RS256",
+			use: "sig",
+		},
+	};
+	return cachedConfiguration;
+}
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const path = new URL(request.url).pathname;
+	async fetch(request: Request, env: Env): Promise<Response> {
+		const selected = configuration(env);
+		const path = new URL(request.url).pathname;
 
-    if (request.method === "GET" && path === "/.well-known/openid-configuration") {
-      return Response.json(
-        {
-          issuer: env.ISSUER_URL,
-          jwks_uri: `${env.ISSUER_URL}/.well-known/jwks.json`,
-          response_types_supported: ["id_token"],
-          subject_types_supported: ["public"],
-          id_token_signing_alg_values_supported: ["RS256"],
-        },
-        { headers: { "Cache-Control": "public, max-age=3600" } },
-      );
-    }
+		if (request.method === "GET" && path === "/.well-known/openid-configuration") {
+			return Response.json(
+				{
+					issuer: selected.issuerUrl,
+					jwks_uri: `${selected.issuerUrl}/.well-known/jwks.json`,
+					response_types_supported: ["id_token"],
+					subject_types_supported: ["public"],
+					id_token_signing_alg_values_supported: ["RS256"],
+				},
+				{ headers: { "Cache-Control": "public, max-age=3600" } },
+			);
+		}
 
-    if (request.method === "GET" && path === "/.well-known/jwks.json") {
-      return Response.json(
-        { keys: [PUBLIC_JWK] },
-        { headers: { "Cache-Control": "public, max-age=3600" } },
-      );
-    }
+		if (request.method === "GET" && path === "/.well-known/jwks.json") {
+			return Response.json(
+				{ keys: [selected.jwk] },
+				{ headers: { "Cache-Control": "public, max-age=3600" } },
+			);
+		}
 
-    return new Response("Not found", { status: 404 });
-  },
+		return new Response("Not found", { status: 404 });
+	},
 };

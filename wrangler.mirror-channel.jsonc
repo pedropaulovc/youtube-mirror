@@ -7,9 +7,6 @@
 	"observability": {
 		"enabled": true,
 		"head_sampling_rate": 1,
-		// Cloudflare emits OTLP JSON to these named account-level destinations,
-		// which POST to the youtube-mirror telemetry gateway (/v1/{logs,traces}).
-		// The gateway transcodes to protobuf and forwards to Azure Monitor OTLP/DCR.
 		"logs": {
 			"enabled": true,
 			"head_sampling_rate": 1,
@@ -24,9 +21,6 @@
 			"destinations": ["youtube-azure-traces"]
 		}
 	},
-	// All four workflow bindings are declared here so `wrangler types` emits a
-	// single unified `Env` covering every worker in the project. CHANNEL_WORKFLOW
-	// is defined by this script; the others are cross-script bindings.
 	"workflows": [
 		{
 			"name": "youtube-mirror-channel",
@@ -52,47 +46,7 @@
 			"script_name": "youtube-mirror-profile"
 		}
 	],
-	"triggers": {
-		"crons": ["* * * * *"]
-	},
-	"upload_source_maps": true,
-	// Federation identity for YouTube Data API access via GCP Workload Identity
-	// Federation (replaces a static API key). OIDC_SIGNING_KEY is bound from the
-	// Secrets Store below. See infra/federation.md.
-	"vars": {
-		"OIDC_ISSUER_URL": "https://youtube-mirror-oidc-issuer.pedro-18e.workers.dev",
-		"OIDC_SIGNING_KID": "03c90718",
-		"GCP_WORKLOAD_PROVIDER": "//iam.googleapis.com/projects/410438001325/locations/global/workloadIdentityPools/cloudflare-workers/providers/youtube-mirror-oidc",
-		"GCP_SERVICE_ACCOUNT": "youtube-mirror-cf@youtube-mirror-501119.iam.gserviceaccount.com"
-	},
-	// Placeholder IDs — replace with real resources at provision/deploy time
-	// (see AGENTS.md "Deployment"). Dry-run builds don't contact the API.
-	"kv_namespaces": [
-		{
-			"id": "4678dd1b9ac742439e0a0b029b1e9d03",
-			"binding": "KV"
-		}
-	],
-	"secrets_store_secrets": [
-		{
-			"binding": "OIDC_SIGNING_KEY",
-			"store_id": "f0c7662b60484d17a094e384a3853ab9",
-			"secret_name": "youtube-mirror-oidc-signing-key"
-		},
-		{
-			"binding": "FIRECRAWL_API_TOKEN",
-			"store_id": "f0c7662b60484d17a094e384a3853ab9",
-			"secret_name": "youtube-mirror-firecrawl-api-token"
-		},
-		{
-			"binding": "youtube-mirror-atproto-password-UC5NO8MgTQKHAWXp6z8Xl7yQ",
-			"store_id": "f0c7662b60484d17a094e384a3853ab9",
-			"secret_name": "youtube-mirror-atproto-password-UC5NO8MgTQKHAWXp6z8Xl7yQ"
-		},
-		{
-			"binding": "youtube-mirror-atproto-password-UC5NO8MgTQKHAWXp6z8Xl7yQ-rt",
-			"store_id": "f0c7662b60484d17a094e384a3853ab9",
-			"secret_name": "youtube-mirror-atproto-password-UC5NO8MgTQKHAWXp6z8Xl7yQ-rt"
-		}
-	]
+	"upload_source_maps": true
+	// scripts/render-deploy-configs.ts adds the selected environment's account,
+	// schedules, vars, KV namespace, and Secrets Store bindings.
 }
