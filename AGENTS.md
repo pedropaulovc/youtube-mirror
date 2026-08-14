@@ -103,9 +103,9 @@ Secret sources:
 - Create a new OIDC keypair and gateway bearer for each environment. The private key and bearer are write-only operational secrets.
 - `FIRECRAWL_API_TOKEN` comes from the 1Password environment `bykx5xzmykwxw3of4gtncs7i7i`.
 - ATProto passwords come from the `youtube-mirror` 1Password vault. PPE uses its own accounts and passwords.
-- Create one least-privilege Cloudflare token per account. Do not retain repository-level Cloudflare credentials after cutover.
+- Create one token per Cloudflare account. Grant Workers Scripts Write, Workflows Write, Workers KV Storage Read/Write, Secrets Store Read/Write, Workers Observability Write, and Account Settings Read. Do not retain repository-level Cloudflare credentials after cutover.
 
-Never print secret values. The deployment synchronizes Secrets Store entries, then polls the full paginated inventory under one 60-second deadline until every required entry is active. It uploads `INGEST_BEARER` with `wrangler secret bulk --config` after setting the selected `CLOUDFLARE_ACCOUNT_ID`; do not use Wrangler Action's generic secret helper for this custom config.
+Never print secret values. Before the first write, the deployment derives the public key from `OIDC_SIGNING_KEY` and requires it to match `OIDC_PUBLIC_JWK`. It then synchronizes Secrets Store entries and polls the full paginated inventory under one 60-second deadline until every required entry is active. It uploads `INGEST_BEARER` with `wrangler secret bulk --config` after setting the selected `CLOUDFLARE_ACCOUNT_ID`; do not use Wrangler Action's generic secret helper for this custom config.
 
 ## Deployment and PPE cleanup
 

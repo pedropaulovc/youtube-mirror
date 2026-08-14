@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createPrivateKey, createPublicKey } from "node:crypto";
 import {
 	environmentFromArgs,
 	parseDeploymentEnvironment,
@@ -22,9 +23,9 @@ function requireSecret(name: string): string {
 	return value;
 }
 
-function secretValues(environment: DeploymentEnvironment): SecretValue[] {
+function secretValues(environment: DeploymentEnvironment, signingKey: string): SecretValue[] {
 	const values: SecretValue[] = [
-		{ name: "youtube-mirror-oidc-signing-key", value: requireSecret("OIDC_SIGNING_KEY") },
+		{ name: "youtube-mirror-oidc-signing-key", value: signingKey },
 		{ name: "youtube-mirror-firecrawl-api-token", value: requireSecret("FIRECRAWL_API_TOKEN") },
 	];
 	for (const channelId of environment.channelIds) {
@@ -40,6 +41,24 @@ function secretValues(environment: DeploymentEnvironment): SecretValue[] {
 		);
 	}
 	return values;
+}
+
+function validateSigningKey(environment: DeploymentEnvironment): string {
+	const signingKey = requireSecret("OIDC_SIGNING_KEY");
+	let publicKey: JsonWebKey;
+	try {
+		publicKey = createPublicKey(createPrivateKey(signingKey)).export({ format: "jwk" });
+	} catch {
+		throw new Error("OIDC_SIGNING_KEY is not a valid private key");
+	}
+	if (
+		publicKey.kty !== "RSA" ||
+		publicKey.n !== environment.oidcPublicJwk.n ||
+		publicKey.e !== environment.oidcPublicJwk.e
+	) {
+		throw new Error("OIDC_SIGNING_KEY does not match OIDC_PUBLIC_JWK");
+	}
+	return signingKey;
 }
 
 async function listSecretIds(environment: DeploymentEnvironment, token: string): Promise<Map<string, string>> {
@@ -89,8 +108,9 @@ async function main(): Promise<void> {
 	const expected = environmentFromArgs(process.argv.slice(2));
 	const environment = parseDeploymentEnvironment(process.env, expected);
 	const token = requireSecret("CLOUDFLARE_API_TOKEN");
+	const values = secretValues(environment, validateSigningKey(environment));
 	const existing = await listSecretIds(environment, token);
-	for (const secret of secretValues(environment)) {
+	for (const secret of values) {
 		const id = existing.get(secret.name);
 		if (id) {
 			runWrangler(

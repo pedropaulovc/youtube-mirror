@@ -19,16 +19,24 @@ interface PublicJwk {
 }
 
 interface IssuerConfiguration {
+	environment: "production" | "ppe";
 	issuerUrl: string;
+	signingKid: string;
+	jwkSource: string;
 	jwk: PublicJwk;
 }
 
-let cachedSource: string | undefined;
 let cachedConfiguration: IssuerConfiguration | undefined;
 
 function configuration(env: Env): IssuerConfiguration {
-	const source = `${env.DEPLOYMENT_ENVIRONMENT}\u0000${env.ISSUER_URL}\u0000${env.OIDC_SIGNING_KID}\u0000${env.OIDC_PUBLIC_JWK}`;
-	if (source === cachedSource && cachedConfiguration) return cachedConfiguration;
+	if (
+		cachedConfiguration?.environment === env.DEPLOYMENT_ENVIRONMENT &&
+		cachedConfiguration.issuerUrl === env.ISSUER_URL &&
+		cachedConfiguration.signingKid === env.OIDC_SIGNING_KID &&
+		cachedConfiguration.jwkSource === env.OIDC_PUBLIC_JWK
+	) {
+		return cachedConfiguration;
+	}
 	if (env.DEPLOYMENT_ENVIRONMENT !== "production" && env.DEPLOYMENT_ENVIRONMENT !== "ppe") {
 		throw new Error("Invalid deployment environment");
 	}
@@ -71,8 +79,10 @@ function configuration(env: Env): IssuerConfiguration {
 		throw new Error("OIDC public JWK does not match the configured RS256 signing kid");
 	}
 
-	cachedSource = source;
 	cachedConfiguration = {
+		environment: env.DEPLOYMENT_ENVIRONMENT,
+		signingKid: env.OIDC_SIGNING_KID,
+		jwkSource: env.OIDC_PUBLIC_JWK,
 		issuerUrl: issuer.origin,
 		jwk: {
 			kty: "RSA",

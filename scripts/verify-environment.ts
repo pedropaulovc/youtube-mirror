@@ -159,15 +159,21 @@ async function verifyDeployedBindings(
 	token: string,
 	deadline: number,
 ): Promise<void> {
-	const passwordBindings = environment.channelIds.flatMap((channelId) => [
-		`youtube-mirror-atproto-password-${channelId}`,
-		`youtube-mirror-atproto-password-${channelId}-rt`,
-	]);
-	const requirements: ReadonlyArray<readonly [string, readonly string[]]> = [
-		["youtube-mirror-channel", ["OIDC_SIGNING_KEY", "FIRECRAWL_API_TOKEN", ...passwordBindings]],
-		["youtube-mirror-item", ["OIDC_SIGNING_KEY", "FIRECRAWL_API_TOKEN", ...passwordBindings]],
-		["youtube-mirror-delete", ["OIDC_SIGNING_KEY", ...passwordBindings]],
-		["youtube-mirror-profile", ["OIDC_SIGNING_KEY", ...passwordBindings]],
+	const passwordBindings: ReadonlyArray<readonly [string, string]> = environment.channelIds.flatMap(
+		(channelId) => [
+			[`youtube-mirror-atproto-password-${channelId}`, `youtube-mirror-atproto-password-${channelId}`] as const,
+			[`youtube-mirror-atproto-password-${channelId}-rt`, `youtube-mirror-atproto-password-${channelId}-rt`] as const,
+		],
+	);
+	const oidcBinding = ["OIDC_SIGNING_KEY", "youtube-mirror-oidc-signing-key"] as const;
+	const firecrawlBinding = ["FIRECRAWL_API_TOKEN", "youtube-mirror-firecrawl-api-token"] as const;
+	const requirements: ReadonlyArray<
+		readonly [string, ReadonlyArray<readonly [string, string]>]
+	> = [
+		["youtube-mirror-channel", [oidcBinding, firecrawlBinding, ...passwordBindings]],
+		["youtube-mirror-item", [oidcBinding, firecrawlBinding, ...passwordBindings]],
+		["youtube-mirror-delete", [oidcBinding, ...passwordBindings]],
+		["youtube-mirror-profile", [oidcBinding, ...passwordBindings]],
 	];
 	const headers = { Authorization: `Bearer ${token}` };
 
@@ -189,9 +195,9 @@ async function verifyDeployedBindings(
 		) {
 			throw new Error(`${worker} is not bound to the selected KV namespace`);
 		}
-		for (const secretName of expectedSecrets) {
+		for (const [bindingName, secretName] of expectedSecrets) {
 			const secret = bindings.find(
-				(binding) => isObject(binding) && binding.name === secretName,
+				(binding) => isObject(binding) && binding.name === bindingName,
 			);
 			if (
 				!isObject(secret) ||
@@ -199,7 +205,7 @@ async function verifyDeployedBindings(
 				secret.store_id !== environment.secretsStoreId ||
 				secret.secret_name !== secretName
 			) {
-				throw new Error(`${worker} is missing the selected ${secretName} Secrets Store binding`);
+				throw new Error(`${worker} is missing the selected ${bindingName} Secrets Store binding`);
 			}
 		}
 	}

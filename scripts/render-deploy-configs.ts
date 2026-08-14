@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseConfigFileTextToJson } from "typescript";
 import {
 	environmentFromArgs,
@@ -30,14 +31,18 @@ interface JsonObject {
 	[key: string]: unknown;
 }
 
-function secretBinding(binding: string, storeId: string): JsonObject {
-	return { binding, store_id: storeId, secret_name: binding };
+function secretBinding(binding: string, storeId: string, secretName = binding): JsonObject {
+	return { binding, store_id: storeId, secret_name: secretName };
 }
 
 function contentBindings(configPath: string, environment: DeploymentEnvironment): JsonObject[] {
-	const bindings = [secretBinding("OIDC_SIGNING_KEY", environment.secretsStoreId)];
+	const bindings = [
+		secretBinding("OIDC_SIGNING_KEY", environment.secretsStoreId, "youtube-mirror-oidc-signing-key"),
+	];
 	if (FIRECRAWL_CONFIGS.has(configPath)) {
-		bindings.push(secretBinding("FIRECRAWL_API_TOKEN", environment.secretsStoreId));
+		bindings.push(
+			secretBinding("FIRECRAWL_API_TOKEN", environment.secretsStoreId, "youtube-mirror-firecrawl-api-token"),
+		);
 	}
 	for (const channelId of environment.channelIds) {
 		bindings.push(
@@ -48,7 +53,7 @@ function contentBindings(configPath: string, environment: DeploymentEnvironment)
 	return bindings;
 }
 
-function renderConfig(
+export function renderConfig(
 	configPath: string,
 	base: JsonObject,
 	environment: DeploymentEnvironment,
@@ -96,7 +101,9 @@ function renderConfig(
 			GATEWAY_FEDERATION_SUBJECT: "cf-worker:youtube-mirror-telemetry-gateway",
 			OIDC_SIGNING_KID: environment.oidcSigningKid,
 		};
-		rendered.secrets_store_secrets = [secretBinding("OIDC_SIGNING_KEY", environment.secretsStoreId)];
+		rendered.secrets_store_secrets = [
+			secretBinding("OIDC_SIGNING_KEY", environment.secretsStoreId, "youtube-mirror-oidc-signing-key"),
+		];
 	}
 	return rendered;
 }
@@ -119,7 +126,9 @@ async function main(): Promise<void> {
 	}
 }
 
-main().catch((error: unknown) => {
-	console.error(error instanceof Error ? error.message : "Could not render deployment configs");
-	process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+	main().catch((error: unknown) => {
+		console.error(error instanceof Error ? error.message : "Could not render deployment configs");
+		process.exitCode = 1;
+	});
+}
