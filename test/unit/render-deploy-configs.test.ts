@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DeploymentEnvironment } from "../../scripts/deployment-environment";
-import { renderConfig } from "../../scripts/render-deploy-configs";
+import { renderConfig } from "../../scripts/deployment-config";
 
 const environment: DeploymentEnvironment = {
 	name: "ppe",
