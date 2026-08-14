@@ -1,20 +1,59 @@
-name: PR Cleanup
+name: Restore PPE
+
 permissions:
   contents: read
 
 on:
   pull_request:
     branches: [main]
-    types: [closed]
+    types: [closed, unlabeled]
 
 concurrency:
-  group: pr-${{ github.event.pull_request.number }}
+  group: deploy-ppe
   cancel-in-progress: true
 
 jobs:
-  cleanup:
+  restore:
+    if: >-
+      (github.event.action == 'closed' && contains(github.event.pull_request.labels.*.name, 'deploy-ppe')) ||
+      (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-ppe')
     runs-on: ubuntu-latest
+    environment: ppe
+    timeout-minutes: 15
+    env:
+      DEPLOY_ENVIRONMENT: ppe
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      KV_NAMESPACE_ID: ${{ vars.KV_NAMESPACE_ID }}
+      SECRETS_STORE_ID: ${{ vars.SECRETS_STORE_ID }}
+      WORKERS_DEV_SUBDOMAIN: ${{ vars.WORKERS_DEV_SUBDOMAIN }}
+      OIDC_ISSUER_URL: ${{ vars.OIDC_ISSUER_URL }}
+      TELEMETRY_GATEWAY_ORIGIN: ${{ vars.TELEMETRY_GATEWAY_ORIGIN }}
+      OIDC_SIGNING_KID: ${{ vars.OIDC_SIGNING_KID }}
+      OIDC_PUBLIC_JWK: ${{ vars.OIDC_PUBLIC_JWK }}
+      GCP_WORKLOAD_PROVIDER: ${{ vars.GCP_WORKLOAD_PROVIDER }}
+      GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_APP_CLIENT_ID: ${{ vars.AZURE_APP_CLIENT_ID }}
+      OTLP_TRACES_ENDPOINT: ${{ vars.OTLP_TRACES_ENDPOINT }}
+      OTLP_METRICS_ENDPOINT: ${{ vars.OTLP_METRICS_ENDPOINT }}
+      OTLP_LOGS_ENDPOINT: ${{ vars.OTLP_LOGS_ENDPOINT }}
+      MIRROR_CHANNEL_IDS: ${{ vars.MIRROR_CHANNEL_IDS }}
+      ENABLE_SCHEDULES: ${{ vars.ENABLE_SCHEDULES }}
+      OIDC_SIGNING_KEY: ${{ secrets.OIDC_SIGNING_KEY }}
+      FIRECRAWL_API_TOKEN: ${{ secrets.FIRECRAWL_API_TOKEN }}
+      ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ: ${{ secrets.ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ }}
+      ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ_RT: ${{ secrets.ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ_RT }}
+      GATEWAY_INGEST_BEARER: ${{ secrets.GATEWAY_INGEST_BEARER }}
     steps:
-      - name: PR cleanup placeholder
-        run: |
-          echo "PR #${{ github.event.pull_request.number }} closed. Add cleanup steps here (preview deployments, ephemeral environments, etc.)"
+      - name: Checkout main, not the closed pull request
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Restore shared PPE from main
+        run: npm run deploy:ppe

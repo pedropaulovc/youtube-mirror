@@ -4,23 +4,27 @@ import { join } from "node:path";
 import { AtpAgent } from "@atproto/api";
 import type { ChannelConfig } from "../worker/types.js";
 import { ensureOpEnv } from "./op-bootstrap.js";
+import { environmentFromArgs, parseDeploymentEnvironment } from "./deployment-environment.js";
 
+const RAW_ARGS = process.argv.slice(2);
+const DEPLOYMENT_NAME = environmentFromArgs(RAW_ARGS);
+const SCRIPT_ARGS = [...RAW_ARGS];
+SCRIPT_ARGS.splice(SCRIPT_ARGS.indexOf("--environment"), 2);
+const confirmIndex = SCRIPT_ARGS.indexOf("--confirm-account");
+const confirmedAccount = confirmIndex >= 0 ? SCRIPT_ARGS[confirmIndex + 1] : undefined;
+if (confirmIndex >= 0) SCRIPT_ARGS.splice(confirmIndex, 2);
+process.env.DEPLOY_ENVIRONMENT = DEPLOYMENT_NAME;
+const DEPLOYMENT = parseDeploymentEnvironment(process.env, DEPLOYMENT_NAME);
+if (confirmedAccount !== DEPLOYMENT.accountId) {
+	throw new Error(`Pass --confirm-account ${DEPLOYMENT.accountId} to deprovision ${DEPLOYMENT.name}`);
+}
 ensureOpEnv(["CLOUDFLARE_API_TOKEN"]);
 
-const CACHE_DIR = join(import.meta.dirname, ".deprovision-cache");
-
-// ── Constants ──────────────────────────────────────────────────────────
-const SECRETS_STORE_ID = "f0c7662b60484d17a094e384a3853ab9";
-const KV_NAMESPACE_ID = "4678dd1b9ac742439e0a0b029b1e9d03";
-const ACCOUNT_ID = "18ef3246e9f36d1560485ef53889c0ab";
-const OP_ENVIRONMENT = "bykx5xzmykwxw3of4gtncs7i7i";
-const BACKUP_VAULT = "twitter-mirror-backup";
-const WRANGLER_CONFIGS = [
-	"wrangler.mirror-channel.jsonc",
-	"wrangler.mirror-item.jsonc",
-	"wrangler.mirror-delete.jsonc",
-	"wrangler.mirror-profile.jsonc",
-];
+const CACHE_DIR = join(import.meta.dirname, ".deprovision-cache", DEPLOYMENT.name);
+const SECRETS_STORE_ID = DEPLOYMENT.secretsStoreId;
+const KV_NAMESPACE_ID = DEPLOYMENT.kvNamespaceId;
+const ACCOUNT_ID = DEPLOYMENT.accountId;
+const BACKUP_VAULT = "youtube-mirror";
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -32,9 +36,6 @@ function run(cmd: string): string {
 	return execSync(cmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
 
-function runPassthrough(cmd: string) {
-	execSync(cmd, { encoding: "utf8", stdio: "inherit" });
-}
 
 // ── KV Config ─────────────────────────────────────────────────────────
 
@@ -117,6 +118,28 @@ function archive1PasswordItem(handle: string): void {
 	}
 }
 
+function removeGitHubEnvironmentAccount(channelId: string): void {
+	for (const name of [`ATPROTO_PASSWORD_${channelId}`, `ATPROTO_PASSWORD_${channelId}_RT`]) {
+		try {
+			run(`gh secret delete "${name}" --env "${DEPLOYMENT.name}"`);
+			log("github", `${name}: deleted from ${DEPLOYMENT.name}`);
+		} catch {
+			log("github", `${name}: not found in ${DEPLOYMENT.name}`);
+		}
+	}
+	const remaining = DEPLOYMENT.channelIds.filter((configured) => configured !== channelId);
+	if (remaining.length === DEPLOYMENT.channelIds.length) {
+		throw new Error(`${channelId} is not listed in ${DEPLOYMENT.name} MIRROR_CHANNEL_IDS`);
+	}
+	if (remaining.length === 0) {
+		run(`gh variable delete MIRROR_CHANNEL_IDS --env "${DEPLOYMENT.name}"`);
+		log("github", `Removed the empty ${DEPLOYMENT.name} MIRROR_CHANNEL_IDS variable`);
+		return;
+	}
+	run(`gh variable set MIRROR_CHANNEL_IDS --env "${DEPLOYMENT.name}" --body "${remaining.join(",")}"`);
+	log("github", `Removed ${channelId} from ${DEPLOYMENT.name} MIRROR_CHANNEL_IDS`);
+}
+
 // ── Cloudflare Secrets Store ──────────────────────────────────────────
 
 function deleteSecretStoreSecret(name: string): void {
@@ -191,103 +214,26 @@ function bulkDeleteKvKeys(prefix: string): number {
 	return allKeys.length;
 }
 
-// ── Wrangler Config Cleanup ───────────────────────────────────────────
-
-function removeWranglerBindings(channelId: string): void {
-	const mainBinding = `youtube-mirror-atproto-password-${channelId}`;
-	const rtBinding = `youtube-mirror-atproto-password-${channelId}-rt`;
-
-	for (const configPath of WRANGLER_CONFIGS) {
-		const content = readFileSync(configPath, "utf8");
-
-		if (!content.includes(mainBinding)) {
-			log("wrangler", `${configPath}: no bindings found, skipping`);
-			continue;
-		}
-
-		// Remove the two binding objects (main + rt) — leading-comma form first.
-		const bindingPattern = new RegExp(
-			`,\\s*\\{\\s*"binding":\\s*"${mainBinding}"[^}]*\\}\\s*,\\s*\\{\\s*"binding":\\s*"${rtBinding}"[^}]*\\}`,
-			"s",
-		);
-		let updated = content.replace(bindingPattern, "");
-
-		// Fallback: these were the first entries (trailing comma form).
-		if (updated === content) {
-			const altPattern = new RegExp(
-				`\\{\\s*"binding":\\s*"${mainBinding}"[^}]*\\}\\s*,\\s*\\{\\s*"binding":\\s*"${rtBinding}"[^}]*\\}\\s*,`,
-				"s",
-			);
-			updated = content.replace(altPattern, "");
-		}
-
-		if (updated === content) {
-			log("wrangler", `WARNING: regex did not match in ${configPath}`);
-			continue;
-		}
-
-		writeFileSync(configPath, updated);
-		log("wrangler", `${configPath}: bindings removed`);
-	}
-}
-
-function removeTypeDeclarations(channelId: string): void {
-	const typesPath = "worker-configuration.d.ts";
-	const content = readFileSync(typesPath, "utf8");
-	const mainBinding = `youtube-mirror-atproto-password-${channelId}`;
-
-	if (!content.includes(mainBinding)) {
-		log("types", "No type declarations found, skipping");
-		return;
-	}
-
-	const pattern = new RegExp(
-		`\\s*"${mainBinding}":\\s*SecretsStoreSecret;\\s*"${mainBinding}-rt":\\s*SecretsStoreSecret;`,
-	);
-	const updated = content.replace(pattern, "");
-
-	if (updated === content) {
-		log("types", "WARNING: regex did not match in worker-configuration.d.ts");
-		return;
-	}
-
-	writeFileSync(typesPath, updated);
-	log("types", "worker-configuration.d.ts: declarations removed");
-}
-
-// ── Deploy ────────────────────────────────────────────────────────────
-
-function deployViaGit(channelId: string): void {
-	log("deploy", "Committing and pushing...");
-	runPassthrough("git add wrangler.mirror-*.jsonc worker-configuration.d.ts");
-	try {
-		run("git diff --cached --quiet");
-		log("deploy", "No changes to commit, skipping");
-		return;
-	} catch {
-		// has staged changes, proceed
-	}
-	runPassthrough(`git commit -m "Remove ${channelId} mirror account bindings"`);
-	runPassthrough("git push");
-	log("deploy", "Pushed to remote. Cloudflare CI/CD will deploy.");
-}
 
 // ── Main ──────────────────────────────────────────────────────────────
 
 async function main() {
-	const channelId = process.argv[2];
-	const mainDeleteToken = process.argv[3];
-	const rtDeleteToken = process.argv[4];
+	const channelId = SCRIPT_ARGS[0];
+	const mainDeleteToken = SCRIPT_ARGS[1];
+	const rtDeleteToken = SCRIPT_ARGS[2];
 	if (!channelId) {
-		console.error("Usage: npx tsx scripts/deprovision-account.ts <channelId> [mainDeleteToken] [rtDeleteToken]");
+		console.error("Usage: npx tsx scripts/deprovision-account.ts <channelId> [mainDeleteToken] [rtDeleteToken] --environment production|ppe --confirm-account <accountId>");
 		console.error("");
 		console.error("Run without tokens first to deactivate accounts and request deletion tokens.");
 		console.error("Then re-run with the email tokens to permanently delete.");
 		process.exit(1);
 	}
+	if (!DEPLOYMENT.channelIds.includes(channelId)) {
+		throw new Error(`${channelId} is not listed in ${DEPLOYMENT.name} MIRROR_CHANNEL_IDS`);
+	}
 
 	// Phase 0: Fetch account config from KV.
-	log("main", `Deprovisioning mirror for ${channelId}`);
+	log("main", `Deprovisioning ${DEPLOYMENT.name} mirror for ${channelId}`);
 	const config = fetchKvConfig(channelId);
 	const mainAccount = config.main.atProtoAccount;
 	const rtAccount = config.rt.atProtoAccount;
@@ -320,7 +266,7 @@ async function main() {
 	if (needsTokens && !mainDeleteToken) {
 		log("main", "");
 		log("main", "Accounts deactivated. Check email for deletion tokens, then re-run:");
-		log("main", `  op run --environment ${OP_ENVIRONMENT} -- npx tsx scripts/deprovision-account.ts ${channelId} <mainToken> <rtToken>`);
+		log("main", `  npx tsx scripts/deprovision-account.ts ${channelId} <mainToken> <rtToken> --environment ${DEPLOYMENT.name} --confirm-account ${DEPLOYMENT.accountId}`);
 		log("main", "");
 		log("main", "Continuing with infrastructure cleanup...");
 	}
@@ -340,6 +286,7 @@ async function main() {
 	log("main", "Phase 4: Deleting secrets store secrets...");
 	deleteSecretStoreSecret(config.main.passwordKey);
 	deleteSecretStoreSecret(config.rt.passwordKey);
+	removeGitHubEnvironmentAccount(channelId);
 
 	// Phase 5: Delete KV records.
 	log("main", "Phase 5: Cleaning up KV...");
@@ -352,17 +299,9 @@ async function main() {
 	const cursorCount = bulkDeleteKvKeys(`comment-cursor:${channelId}:`);
 	log("kv", `deleted ${cursorCount} comment-cursor:${channelId}:* keys`);
 
-	// Phase 6: Remove wrangler bindings and type declarations.
-	log("main", "Phase 6: Removing wrangler bindings...");
-	removeWranglerBindings(channelId);
-	removeTypeDeclarations(channelId);
-
-	// Phase 7: Commit and push.
-	log("main", "Phase 7: Deploying...");
-	deployViaGit(channelId);
 
 	log("main", "");
-	log("main", "=== Deprovisioning complete! ===");
+	log("main", `${DEPLOYMENT.name} account deprovisioning complete.`);
 }
 
 main().catch((e) => {

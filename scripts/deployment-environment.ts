@@ -14,6 +14,7 @@ export interface DeploymentEnvironment {
 	accountId: string;
 	kvNamespaceId: string;
 	secretsStoreId: string;
+	workersDevSubdomain: string;
 	issuerUrl: string;
 	telemetryGatewayOrigin: string;
 	oidcSigningKid: string;
@@ -34,14 +35,11 @@ export const DEPLOYMENT_ACCOUNTS = {
 	ppe: "b846acaf5be2e542781751bd94a63153",
 } as const satisfies Record<DeploymentEnvironmentName, string>;
 
-const SOURCE_ACCOUNT_ID = "18ef3246e9f36d1560485ef53889c0ab";
-const SOURCE_KV_NAMESPACE_ID = "4678dd1b9ac742439e0a0b029b1e9d03";
-const SOURCE_SECRETS_STORE_ID = "f0c7662b60484d17a094e384a3853ab9";
-const SOURCE_WORKERS_DEV_SUBDOMAIN = "pedro-18e";
 const HEX_ID = /^[a-f0-9]{32}$/;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const KID = /^[A-Za-z0-9_-]{8,128}$/;
 const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
+const WORKERS_DEV_SUBDOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 export const REQUIRED_SECRET_NAMES = (channelIds: readonly string[]): readonly string[] => [
 	"youtube-mirror-oidc-signing-key",
@@ -58,10 +56,9 @@ function requireValue(source: NodeJS.ProcessEnv, name: string): string {
 	return value;
 }
 
-function requireHexId(source: NodeJS.ProcessEnv, name: string, forbidden: string): string {
+function requireHexId(source: NodeJS.ProcessEnv, name: string): string {
 	const value = requireValue(source, name);
 	if (!HEX_ID.test(value)) throw new Error(`${name} must be a 32-character lowercase hexadecimal Cloudflare ID`);
-	if (value === forbidden) throw new Error(`${name} still points at the retired source account resource`);
 	return value;
 }
 
@@ -71,7 +68,12 @@ function requireUuid(source: NodeJS.ProcessEnv, name: string): string {
 	return value;
 }
 
-function requireOrigin(source: NodeJS.ProcessEnv, name: string, workerName: string): string {
+function requireOrigin(
+	source: NodeJS.ProcessEnv,
+	name: string,
+	workerName: string,
+	workersDevSubdomain: string,
+): string {
 	const value = requireValue(source, name);
 	let url: URL;
 	try {
@@ -82,11 +84,8 @@ function requireOrigin(source: NodeJS.ProcessEnv, name: string, workerName: stri
 	if (url.protocol !== "https:" || url.username || url.password || url.port || url.pathname !== "/" || url.search || url.hash) {
 		throw new Error(`${name} must be an HTTPS origin without credentials, a port, path, query, or fragment`);
 	}
-	if (!url.hostname.startsWith(`${workerName}.`) || !url.hostname.endsWith(".workers.dev")) {
-		throw new Error(`${name} must be the ${workerName} workers.dev origin`);
-	}
-	if (url.hostname.endsWith(`.${SOURCE_WORKERS_DEV_SUBDOMAIN}.workers.dev`)) {
-		throw new Error(`${name} still points at the retired source workers.dev subdomain`);
+	if (url.hostname !== `${workerName}.${workersDevSubdomain}.workers.dev`) {
+		throw new Error(`${name} does not match WORKERS_DEV_SUBDOMAIN`);
 	}
 	return url.origin;
 }
@@ -171,18 +170,29 @@ export function parseDeploymentEnvironment(
 	}
 
 	const accountId = requireValue(source, "CLOUDFLARE_ACCOUNT_ID");
-	if (accountId === SOURCE_ACCOUNT_ID) throw new Error("CLOUDFLARE_ACCOUNT_ID points at the retired source account");
 	if (accountId !== DEPLOYMENT_ACCOUNTS[name]) {
 		throw new Error(`${name} must use Cloudflare account ${DEPLOYMENT_ACCOUNTS[name]}`);
 	}
 
+	const workersDevSubdomain = requireValue(source, "WORKERS_DEV_SUBDOMAIN");
+	if (!WORKERS_DEV_SUBDOMAIN.test(workersDevSubdomain)) {
+		throw new Error("WORKERS_DEV_SUBDOMAIN must be a valid Cloudflare workers.dev subdomain");
+	}
 	const oidcSigningKid = requireValue(source, "OIDC_SIGNING_KID");
-	if (!KID.test(oidcSigningKid)) throw new Error("OIDC_SIGNING_KID must be an 8-128 character base64url value");
-	const issuerUrl = requireOrigin(source, "OIDC_ISSUER_URL", "youtube-mirror-oidc-issuer");
+	if (!KID.test(oidcSigningKid) || !oidcSigningKid.startsWith(`${name}-`)) {
+		throw new Error(`OIDC_SIGNING_KID must be an 8-128 character base64url value prefixed with ${name}-`);
+	}
+	const issuerUrl = requireOrigin(
+		source,
+		"OIDC_ISSUER_URL",
+		"youtube-mirror-oidc-issuer",
+		workersDevSubdomain,
+	);
 	const telemetryGatewayOrigin = requireOrigin(
 		source,
 		"TELEMETRY_GATEWAY_ORIGIN",
 		"youtube-mirror-telemetry-gateway",
+		workersDevSubdomain,
 	);
 	if (issuerUrl === telemetryGatewayOrigin) throw new Error("OIDC issuer and telemetry gateway origins must differ");
 
@@ -194,8 +204,9 @@ export function parseDeploymentEnvironment(
 	return {
 		name,
 		accountId,
-		kvNamespaceId: requireHexId(source, "KV_NAMESPACE_ID", SOURCE_KV_NAMESPACE_ID),
-		secretsStoreId: requireHexId(source, "SECRETS_STORE_ID", SOURCE_SECRETS_STORE_ID),
+		kvNamespaceId: requireHexId(source, "KV_NAMESPACE_ID"),
+		secretsStoreId: requireHexId(source, "SECRETS_STORE_ID"),
+		workersDevSubdomain,
 		issuerUrl,
 		telemetryGatewayOrigin,
 		oidcSigningKid,

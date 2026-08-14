@@ -60,6 +60,7 @@ function main(): void {
 	deploy(config("delete"));
 	deploy(config("profile"));
 	deploy(config("channel"));
+	tsx("scripts/verify-environment.ts", selected, "--active-secrets", "--issuer", "--bindings");
 
 	console.log(
 		`Deployed ${environment.name} to ${environment.accountId} with schedules ${environment.enableSchedules ? "enabled" : "disabled"}`,

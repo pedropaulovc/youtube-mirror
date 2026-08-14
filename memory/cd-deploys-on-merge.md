@@ -1,18 +1,12 @@
 ---
 name: cd-deploys-on-merge
-description: Production deploy of all 6 workers happens via the ci-cd-main deploy job on merge to main
+description: Production and PPE deploy through isolated GitHub Environments in dependency order
 metadata:
   type: project
 ---
 
-Production deploys are **not** Cloudflare-native git integration. The `deploy` job in
-`.github/workflows/ci-cd-main.yml` (added 2026-07-01, needs test/typecheck/build) runs
-`npm run deploy` on every push to `main`, authenticating with the `CLOUDFLARE_API_TOKEN`
-/ `CLOUDFLARE_ACCOUNT_ID` Actions secrets. It ships all six workers: channel, item,
-delete, profile, oidc-issuer, telemetry-gateway.
+Production deployment runs from `.github/workflows/ci-cd-main.yml` after test, typecheck, and build pass on `main`, or by manual dispatch. The deploy job uses the `production` GitHub Environment. PPE uses the `ppe` GitHub Environment and deploys a labeled pull request with schedules forced off.
 
-Consequence for provisioning scripts: a bare `git push` to a feature branch does NOT
-deploy — only merge-to-main does. `provision-account.ts` therefore gates KV-seeding
-behind `--seed-kv`: first run commits app-password bindings (→ PR → merge → deploy),
-then re-run with `--seed-kv` to seed KV once the bindings are live, avoiding the cron
-picking up the channel before its bindings deploy. Unblock the PR via [[ci-review-gate]].
+Both jobs call an environment-specific package script. The script validates the Cloudflare account and resource selectors, renders ignored Wrangler configs, synchronizes secrets, verifies active metadata, and deploys issuer, gateway, destinations, item, delete/profile, and channel in that order.
+
+`provision-account.ts` writes ATProto passwords to the selected GitHub Environment. Its first run does not seed KV. After the environment deployment installs and verifies the password bindings, run it again with `--seed-kv`. This prevents the channel cron from finding a user record before its bindings exist.

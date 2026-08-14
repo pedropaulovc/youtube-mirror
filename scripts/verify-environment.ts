@@ -46,11 +46,15 @@ async function verifyCloudflareResources(
 ): Promise<void> {
 	const base = `https://api.cloudflare.com/client/v4/accounts/${environment.accountId}`;
 	const headers = { Authorization: `Bearer ${token}` };
-	await Promise.all([
+	const [, , subdomain] = await Promise.all([
 		requestJson(`${base}/storage/kv/namespaces/${environment.kvNamespaceId}`, { headers }, deadline),
 		requestJson(`${base}/secrets_store/stores/${environment.secretsStoreId}`, { headers }, deadline),
+		requestJson(`${base}/workers/subdomain`, { headers }, deadline),
 	]);
-	console.log(`Verified ${environment.name} KV and Secrets Store belong to account ${environment.accountId}`);
+	if (!isObject(subdomain.result) || subdomain.result.subdomain !== environment.workersDevSubdomain) {
+		throw new Error("WORKERS_DEV_SUBDOMAIN does not belong to the selected Cloudflare account");
+	}
+	console.log(`Verified ${environment.name} KV, Secrets Store, and workers.dev subdomain belong to account ${environment.accountId}`);
 }
 
 function requireInteger(value: unknown, field: string): number {
@@ -150,6 +154,58 @@ async function verifyActiveSecrets(
 	throw new Error(`Secrets Store activation timed out: ${missing} missing, ${inactive} not active`);
 }
 
+async function verifyDeployedBindings(
+	environment: DeploymentEnvironment,
+	token: string,
+	deadline: number,
+): Promise<void> {
+	const passwordBindings = environment.channelIds.flatMap((channelId) => [
+		`youtube-mirror-atproto-password-${channelId}`,
+		`youtube-mirror-atproto-password-${channelId}-rt`,
+	]);
+	const requirements: ReadonlyArray<readonly [string, readonly string[]]> = [
+		["youtube-mirror-channel", ["OIDC_SIGNING_KEY", "FIRECRAWL_API_TOKEN", ...passwordBindings]],
+		["youtube-mirror-item", ["OIDC_SIGNING_KEY", "FIRECRAWL_API_TOKEN", ...passwordBindings]],
+		["youtube-mirror-delete", ["OIDC_SIGNING_KEY", ...passwordBindings]],
+		["youtube-mirror-profile", ["OIDC_SIGNING_KEY", ...passwordBindings]],
+	];
+	const headers = { Authorization: `Bearer ${token}` };
+
+	for (const [worker, expectedSecrets] of requirements) {
+		const payload = await requestJson(
+			`https://api.cloudflare.com/client/v4/accounts/${environment.accountId}/workers/scripts/${worker}/settings`,
+			{ headers },
+			deadline,
+		);
+		if (!isObject(payload.result) || !Array.isArray(payload.result.bindings)) {
+			throw new Error(`${worker} settings are missing bindings`);
+		}
+		const bindings = payload.result.bindings;
+		const kv = bindings.find((binding) => isObject(binding) && binding.name === "KV");
+		if (
+			!isObject(kv) ||
+			kv.type !== "kv_namespace" ||
+			kv.namespace_id !== environment.kvNamespaceId
+		) {
+			throw new Error(`${worker} is not bound to the selected KV namespace`);
+		}
+		for (const secretName of expectedSecrets) {
+			const secret = bindings.find(
+				(binding) => isObject(binding) && binding.name === secretName,
+			);
+			if (
+				!isObject(secret) ||
+				secret.type !== "secrets_store_secret" ||
+				secret.store_id !== environment.secretsStoreId ||
+				secret.secret_name !== secretName
+			) {
+				throw new Error(`${worker} is missing the selected ${secretName} Secrets Store binding`);
+			}
+		}
+	}
+	console.log(`Verified deployed ${environment.name} KV and Secrets Store bindings`);
+}
+
 function publicJwkMatches(actual: unknown, expected: PublicRsaJwk): boolean {
 	if (!isObject(actual)) return false;
 	return (
@@ -200,6 +256,7 @@ async function main(): Promise<void> {
 	await verifyCloudflareResources(environment, token, deadline);
 	if (args.includes("--active-secrets")) await verifyActiveSecrets(environment, token, deadline);
 	if (args.includes("--issuer")) await verifyIssuer(environment, deadline);
+	if (args.includes("--bindings")) await verifyDeployedBindings(environment, token, deadline);
 }
 
 main().catch((error: unknown) => {
