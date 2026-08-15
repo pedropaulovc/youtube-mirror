@@ -17,38 +17,40 @@ const OP_ENVIRONMENT = "bykx5xzmykwxw3of4gtncs7i7i";
  * secret), the ambient environment is used unchanged.
  */
 function loadLocalEnv(): void {
-	const path = fileURLToPath(new URL("../.env.local", import.meta.url));
-	if (!existsSync(path)) return;
-	for (const line of readFileSync(path, "utf8").split("\n")) {
-		const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
-		if (!m) continue; // skips blanks and `# comment` lines
-		let value = m[2];
-		if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-			value = value.slice(1, -1);
-		}
-		process.env[m[1]] = value;
-	}
+ const path = fileURLToPath(new URL("../.env.local", import.meta.url));
+ if (!existsSync(path)) return;
+ for (const line of readFileSync(path, "utf8").split("\n")) {
+  const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+  if (!m) continue; // skips blanks and `# comment` lines
+  let value = m[2];
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+   value = value.slice(1, -1);
+  }
+  process.env[m[1]] = value;
+ }
 }
 
 export function ensureOpEnv(requiredVars: string[]): void {
-	loadLocalEnv();
-	const missing = requiredVars.filter((v) => !process.env[v]);
-	if (missing.length === 0) return;
+ loadLocalEnv();
+ const missing = requiredVars.filter((v) => !process.env[v]);
+ if (missing.length === 0) return;
 
-	if (process.env.OP_BOOTSTRAPPED === "1") {
-		throw new Error(
-			`Missing env vars after op run: ${missing.join(", ")} (check 1Password environment ${OP_ENVIRONMENT})`,
-		);
-	}
+ if (process.env.OP_BOOTSTRAPPED === "1") {
+  throw new Error(
+   `Missing env vars after op run: ${missing.join(", ")} (check 1Password environment ${OP_ENVIRONMENT})`,
+  );
+ }
 
-	const scriptPath = process.argv[1];
-	const scriptArgs = process.argv.slice(2);
-	// OP_SERVICE_ACCOUNT_TOKEN loaded above is inherited by the `op run` child (and by
-	// the re-exec'd script's own direct `op item` calls, which run under it).
-	const result = spawnSync(
-		"op",
-		["run", "--environment", OP_ENVIRONMENT, "--", "npx", "tsx", scriptPath, ...scriptArgs],
-		{ stdio: "inherit", env: { ...process.env, OP_BOOTSTRAPPED: "1" } },
-	);
-	process.exit(result.status ?? 1);
+ const scriptPath = process.argv[1];
+ const scriptArgs = process.argv.slice(2);
+ const env = { ...process.env, OP_BOOTSTRAPPED: "1" };
+ delete env.CLOUDFLARE_API_TOKEN;
+ // OP_SERVICE_ACCOUNT_TOKEN loaded above is inherited by the `op run` child (and by
+ // the re-exec'd script's own direct `op item` calls, which run under it).
+ const result = spawnSync(
+  "op",
+  ["run", "--environment", OP_ENVIRONMENT, "--", "npx", "tsx", scriptPath, ...scriptArgs],
+  { stdio: "inherit", env },
+ );
+ process.exit(result.status ?? 1);
 }

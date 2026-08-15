@@ -1,21 +1,29 @@
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { chromium } from "playwright";
 import { AtpAgent } from "@atproto/api";
 import type { ChannelConfig } from "../worker/types.js";
 import { ensureOpEnv } from "./op-bootstrap.js";
+import { environmentFromArgs, parseDeploymentEnvironment } from "./deployment-environment.js";
 
+const RAW_ARGS = process.argv.slice(2);
+const DEPLOYMENT_NAME = environmentFromArgs(RAW_ARGS);
+const SCRIPT_ARGS = [...RAW_ARGS];
+SCRIPT_ARGS.splice(SCRIPT_ARGS.indexOf("--environment"), 2);
+process.env.DEPLOY_ENVIRONMENT = DEPLOYMENT_NAME;
 ensureOpEnv(["CLOUDFLARE_API_TOKEN"]);
+const cloudflareApiToken = process.env.CLOUDFLARE_API_TOKEN;
+if (!cloudflareApiToken) throw new Error("CLOUDFLARE_API_TOKEN is required");
+delete process.env.CLOUDFLARE_API_TOKEN;
+const DEPLOYMENT = parseDeploymentEnvironment(process.env, DEPLOYMENT_NAME);
 
 // ── Constants ──────────────────────────────────────────────────────────
 // Bluesky accounts live on the self-hosted PDS; the worker resolves each
 // account's real PDS via its DID document at runtime (see resolvePdsUrl).
 const PDS_HOST = "selfhosted.social";
 const PDS_URL = `https://${PDS_HOST}`;
-const SECRETS_STORE_ID = "f0c7662b60484d17a094e384a3853ab9";
-const KV_NAMESPACE_ID = "4678dd1b9ac742439e0a0b029b1e9d03";
-const OP_ENVIRONMENT = "bykx5xzmykwxw3of4gtncs7i7i";
+const KV_NAMESPACE_ID = DEPLOYMENT.kvNamespaceId;
 // 1Password vault reachable by the service-account token in .env.local.
 const BACKUP_VAULT = "youtube-mirror";
 const BIRTH_DATE_ISO = "1991-03-01";
@@ -24,14 +32,6 @@ const EMAIL_DOMAIN = "vza.net";
 const MAX_HANDLE_PREFIX = 18; // chars before .selfhosted.social
 const DEFAULT_MAX_ITEMS = 15;
 const DEFAULT_POLL_INTERVAL_MINUTES = 15;
-// Bluesky config workers that create/delete posts and therefore need the
-// per-channel app-password bindings declared in their secrets_store_secrets.
-const WRANGLER_CONFIGS = [
-	"wrangler.mirror-channel.jsonc",
-	"wrangler.mirror-item.jsonc",
-	"wrangler.mirror-delete.jsonc",
-	"wrangler.mirror-profile.jsonc",
-];
 
 // ── PDS Login Rate Limiter ─────────────────────────────────────────────
 // selfhosted.social enforces ~5 logins per 5-minute sliding window.
@@ -88,13 +88,44 @@ function log(phase: string, msg: string) {
 	console.log(`[${phase}] ${msg}`);
 }
 
-function run(cmd: string): string {
-	return execSync(cmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+const MAX_CHILD_DIAGNOSTIC_LENGTH = 1_000;
+
+function sanitizedChildEnv(): NodeJS.ProcessEnv {
+	const env = { ...process.env };
+	delete env.CLOUDFLARE_API_TOKEN;
+	return env;
 }
 
-function runPassthrough(cmd: string) {
-	execSync(cmd, { encoding: "utf8", stdio: "inherit" });
+function cloudflareChildEnv(apiToken: string): NodeJS.ProcessEnv {
+	const env = sanitizedChildEnv();
+	env.CLOUDFLARE_API_TOKEN = apiToken;
+	return env;
 }
+
+function runWrangler(args: readonly string[], apiToken: string, input?: string): string {
+	const result = spawnSync("npx", ["wrangler", ...args], {
+		input,
+		encoding: "utf8",
+		stdio: ["pipe", "pipe", "pipe"],
+		env: cloudflareChildEnv(apiToken),
+	});
+	if (result.status !== 0) {
+		const details = sanitizeDiagnostic(result.stderr.toString());
+		throw new Error(
+			`Wrangler command failed (exit ${result.status ?? "unknown"}${details ? `: ${details}` : ""})`,
+		);
+	}
+	return result.stdout.toString().trim();
+}
+
+function sanitizeDiagnostic(output: string): string {
+	return output
+		.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
+		.replace(/((?:["']?(?:token|secret|password|credential)["']?)\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)/gi, "$1[REDACTED]")
+		.trim()
+		.slice(0, MAX_CHILD_DIAGNOSTIC_LENGTH);
+}
+
 
 function generatePassword(): string {
 	return crypto.randomUUID() + "-" + crypto.randomUUID();
@@ -232,7 +263,6 @@ async function createAccountViaPlaywright(
 
 	log("register", `Creating ${label} account: ${handle}.${PDS_HOST}`);
 	log("register", `  Email: ${email}`);
-	log("register", `  Password: ${password}`);
 	log("register", "");
 
 	const browser = await chromium.launch({ headless: false });
@@ -268,7 +298,7 @@ async function createAccountViaPlaywright(
 
 	log("register", "Step 2/3: Setting handle...");
 	await page.getByText("Choose your username").waitFor({ timeout: 15_000 });
-	const handleInput = page.getByRole("textbox", { name: `.${PDS_HOST}` });
+	const handleInput = page.getByTestId("handleInput");
 	await handleInput.waitFor({ timeout: 5_000 });
 	await handleInput.fill(handle);
 	await page.waitForTimeout(3000);
@@ -329,96 +359,68 @@ function backupPasswordTo1Password(handle: string, password: string, email: stri
 	const fullHandle = `${handle}.${PDS_HOST}`;
 	const plcDidKey = privateKeyHexToDidKey(plcKeyHex);
 	try {
-		run(`op item get "${fullHandle}" --vault ${BACKUP_VAULT} --format json`);
+		runOp(["item", "get", fullHandle, "--vault", BACKUP_VAULT, "--format", "json"]);
 		log("1password", `${fullHandle} already exists, updating PLC key fields`);
-		execSync(
-			`op item edit "${fullHandle}" --vault ${BACKUP_VAULT} "plc_rotation_key_hex[password]=${plcKeyHex}" "plc_rotation_key_did[text]=${plcDidKey}"`,
-			{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-		);
+		runOp([
+			"item",
+			"edit",
+			fullHandle,
+			"--vault",
+			BACKUP_VAULT,
+			`plc_rotation_key_hex[password]=${plcKeyHex}`,
+			`plc_rotation_key_did[text]=${plcDidKey}`,
+		]);
 		return;
 	} catch {
 		// Item doesn't exist, create it
 	}
 	log("1password", `Saving ${fullHandle} to ${BACKUP_VAULT} vault`);
-	execSync(
-		`op item create --category login --vault ${BACKUP_VAULT} --title "${fullHandle}" --url https://bsky.app "username=${fullHandle}" "password=${password}" "email=${email}" "plc_rotation_key_hex[password]=${plcKeyHex}" "plc_rotation_key_did[text]=${plcDidKey}"`,
-		{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-	);
+	runOp([
+		"item",
+		"create",
+		"--category",
+		"login",
+		"--vault",
+		BACKUP_VAULT,
+		"--title",
+		fullHandle,
+		"--url",
+		"https://bsky.app",
+		`username=${fullHandle}`,
+		`password=${password}`,
+		`email=${email}`,
+		`plc_rotation_key_hex[password]=${plcKeyHex}`,
+		`plc_rotation_key_did[text]=${plcDidKey}`,
+	]);
 }
 
-function savePasswordToSecretStore(name: string, password: string): void {
-	log("secrets", `Saving secret: ${name}`);
-	// printf (no trailing newline) instead of echo to avoid storing newlines.
-	try {
-		execSync(
-			`printf '%s' "${password}" | npx wrangler secrets-store secret create ${SECRETS_STORE_ID} --name ${name} --scopes workers --remote`,
-			{ encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
-		);
-	} catch (err) {
-		// Only the already-exists case is safe to ignore. A transient Cloudflare error,
-		// bad credentials, or wrong store ID must abort — otherwise we'd write bindings and
-		// seed KV pointing at a secret that doesn't exist, and every login would fail.
-		const output = `${(err as { stdout?: string }).stdout ?? ""}${(err as { stderr?: string }).stderr ?? ""}${String(err)}`;
-		// CF returns `secret_name_already_exists` (underscores) — match that plus the
-		// human-readable "already exists" and the numeric code 1003. Anything else
-		// (transient API error, bad creds, wrong store ID) must abort.
-		if (!/already[ _]exists|duplicate|code:\s*1003/i.test(output)) {
-			throw new Error(`Failed to create secret ${name}: ${output}`);
-		}
-		log("secrets", `Secret ${name} already exists, skipping`);
+function runOp(args: readonly string[], input?: string): string {
+	const result = spawnSync("op", args, {
+		input,
+		encoding: "utf8",
+		stdio: ["pipe", "pipe", "pipe"],
+		env: sanitizedChildEnv(),
+	});
+	if (result.status !== 0) {
+		const details = sanitizeDiagnostic(result.stderr.toString());
+		throw new Error(`1Password command failed${details ? `: ${details}` : ""}`);
 	}
+	return result.stdout.toString().trim();
 }
 
-/** Append the two per-channel app-password bindings to each worker's secrets_store_secrets. */
-function updateWranglerBindings(channelId: string): void {
-	const mainBinding = `youtube-mirror-atproto-password-${channelId}`;
-	const rtBinding = `${mainBinding}-rt`;
-	const entry = (name: string) =>
-		`\t\t{\n\t\t\t"binding": "${name}",\n\t\t\t"store_id": "${SECRETS_STORE_ID}",\n\t\t\t"secret_name": "${name}"\n\t\t}`;
-	const injection = `,\n${entry(mainBinding)},\n${entry(rtBinding)}`;
 
-	for (const configPath of WRANGLER_CONFIGS) {
-		const content = readFileSync(configPath, "utf8");
-		if (content.includes(mainBinding)) {
-			log("wrangler", `${configPath}: bindings already present, skipping`);
-			continue;
-		}
-		// Insert before the secrets_store_secrets array close (first "\n\t]" after it).
-		const match = content.match(/("secrets_store_secrets"\s*:\s*\[[\s\S]*?)(\n\t\])/);
-		if (!match) {
-			log("wrangler", `WARNING: could not find secrets_store_secrets array in ${configPath}`);
-			continue;
-		}
-		const updated = content.replace(match[0], match[1] + injection + match[2]);
-		writeFileSync(configPath, updated);
-		log("wrangler", `${configPath}: bindings added`);
+function savePasswordToGitHubEnvironment(name: string, password: string): void {
+	const result = spawnSync("gh", ["secret", "set", name, "--env", DEPLOYMENT.name], {
+		input: password,
+		encoding: "utf8",
+		stdio: ["pipe", "inherit", "inherit"],
+	});
+	if (result.error) throw result.error;
+	if (result.status !== 0) {
+		throw new Error(`Could not update ${name} in the ${DEPLOYMENT.name} GitHub Environment`);
 	}
+	log("github", `Updated ${name} in the ${DEPLOYMENT.name} GitHub Environment`);
 }
-
-function updateTypesFile(channelId: string): void {
-	const typesPath = "worker-configuration.d.ts";
-	const content = readFileSync(typesPath, "utf8");
-	const mainBinding = `youtube-mirror-atproto-password-${channelId}`;
-	const rtBinding = `${mainBinding}-rt`;
-
-	if (content.includes(mainBinding)) {
-		log("types", "Bindings already in worker-configuration.d.ts, skipping");
-		return;
-	}
-
-	const anchor = "FIRECRAWL_API_TOKEN: SecretsStoreSecret;";
-	const anchorPos = content.indexOf(anchor);
-	if (anchorPos === -1) {
-		log("types", "WARNING: could not find insertion anchor in worker-configuration.d.ts");
-		return;
-	}
-	const insertPos = content.indexOf("\n", anchorPos) + 1;
-	const newLines = `\t"${mainBinding}": SecretsStoreSecret;\n\t"${rtBinding}": SecretsStoreSecret;\n`;
-	const updated = content.slice(0, insertPos) + newLines + content.slice(insertPos);
-	writeFileSync(typesPath, updated);
-	log("types", "worker-configuration.d.ts updated");
-}
-
 function addKvConfig(
 	channelId: string,
 	youtubeHandle: string,
@@ -427,6 +429,7 @@ function addKvConfig(
 	mainEmail: string,
 	rtEmail: string,
 	maxItems: number,
+	apiToken: string,
 ): void {
 	const config: ChannelConfig = {
 		main: {
@@ -448,33 +451,41 @@ function addKvConfig(
 	};
 
 	// --path avoids Windows/WSL shell quoting mangling the JSON.
-	const tmpFile = `scripts/.tmp-kv-${channelId}.json`;
+	const tmpFile = `scripts/.tmp-kv-${DEPLOYMENT.name}-${channelId}.json`;
 	writeFileSync(tmpFile, JSON.stringify(config));
-	log("kv", `Writing users:${channelId} to KV`);
-	run(`npx wrangler kv key put --namespace-id=${KV_NAMESPACE_ID} "users:${channelId}" --path=${tmpFile} --remote`);
-	try { execSync(`rm ${tmpFile}`); } catch { /* ignore */ }
+	try {
+		log("kv", `Writing users:${channelId} to KV`);
+		runWrangler(
+			[
+				"kv",
+				"key",
+				"put",
+				`--namespace-id=${KV_NAMESPACE_ID}`,
+				`users:${channelId}`,
+				`--path=${tmpFile}`,
+				"--remote",
+			],
+			apiToken,
+		);
+	} finally {
+		try {
+			unlinkSync(tmpFile);
+		} catch {
+			// Ignore cleanup failures after the write result is known.
+		}
+	}
 }
 
-function deployViaGit(channelId: string, youtubeHandle: string): void {
-	updateTypesFile(channelId);
-
-	log("deploy", "Committing and pushing...");
-	runPassthrough("git add wrangler.mirror-*.jsonc worker-configuration.d.ts");
-	try { run("git diff --cached --quiet"); log("deploy", "No changes to commit, skipping"); return; } catch { /* has staged changes */ }
-	runPassthrough(`git commit -m "Add ${youtubeHandle} (${channelId}) mirror account bindings"`);
-	runPassthrough("git push");
-	log("deploy", "Pushed to remote. Open a PR and merge to main — the CI/CD deploy job ships the bindings.");
-}
 
 // ── Main ───────────────────────────────────────────────────────────────
 
 async function main() {
-	const positional = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-	const flags = process.argv.slice(2).filter((a) => a.startsWith("--"));
+	const positional = SCRIPT_ARGS.filter((argument) => !argument.startsWith("--"));
+	const flags = SCRIPT_ARGS.filter((argument) => argument.startsWith("--"));
 	const channelId = positional[0];
 	const youtubeHandleRaw = positional[1];
 	if (!channelId || !youtubeHandleRaw) {
-		console.error("Usage: npx tsx scripts/provision-account.ts <channelId> <handle> [mainToken] [rtToken] [mainPlcToken] [rtPlcToken] [--max=N]");
+		console.error("Usage: npx tsx scripts/provision-account.ts <channelId> <handle> [mainToken] [rtToken] [mainPlcToken] [rtPlcToken] --environment production|ppe [--max=N]");
 		console.error("  channelId: the UC… channel ID");
 		console.error("  handle:    the @handle without the leading @");
 		process.exit(1);
@@ -482,16 +493,22 @@ async function main() {
 	const youtubeHandle = youtubeHandleRaw.replace(/^@/, "");
 	const maxFlag = flags.find((f) => f.startsWith("--max="));
 	const maxItems = maxFlag ? Number(maxFlag.split("=")[1]) : DEFAULT_MAX_ITEMS;
+	if (!DEPLOYMENT.channelIds.includes(channelId)) {
+		throw new Error(`${channelId} is not listed in the ${DEPLOYMENT.name} MIRROR_CHANNEL_IDS variable`);
+	}
 
-	log("main", `Provisioning mirror for @${youtubeHandle} (${channelId})`);
+	log("main", `Provisioning ${DEPLOYMENT.name} mirror for @${youtubeHandle} (${channelId})`);
 
 	// Phase 1: Account details (state file for resumability).
-	const mainHandle = buildHandle(youtubeHandle, "-mirr");
-	const rtHandle = buildHandle(youtubeHandle, "-mir-rt");
-	const mainEmail = `${EMAIL_BASE}-${youtubeHandle.toLowerCase()}@${EMAIL_DOMAIN}`;
-	const rtEmail = `${EMAIL_BASE}-${youtubeHandle.toLowerCase()}-rt@${EMAIL_DOMAIN}`;
+	const mainSuffix = DEPLOYMENT.name === "ppe" ? "-ppe-mir" : "-mirr";
+	const rtSuffix = DEPLOYMENT.name === "ppe" ? "-ppe-rt" : "-mir-rt";
+	const emailEnvironment = DEPLOYMENT.name === "ppe" ? "-ppe" : "";
+	const mainHandle = buildHandle(youtubeHandle, mainSuffix);
+	const rtHandle = buildHandle(youtubeHandle, rtSuffix);
+	const mainEmail = `${EMAIL_BASE}-${youtubeHandle.toLowerCase()}${emailEnvironment}@${EMAIL_DOMAIN}`;
+	const rtEmail = `${EMAIL_BASE}-${youtubeHandle.toLowerCase()}${emailEnvironment}-rt@${EMAIL_DOMAIN}`;
 
-	const stateFile = `scripts/.provision-${youtubeHandle.toLowerCase()}.json`;
+	const stateFile = `scripts/.provision-${DEPLOYMENT.name}-${youtubeHandle.toLowerCase()}.json`;
 	type ProvisionState = { mainPassword: string; rtPassword: string; mainPlcKeyHex?: string; rtPlcKeyHex?: string };
 	let state: ProvisionState;
 	if (existsSync(stateFile)) {
@@ -536,7 +553,7 @@ async function main() {
 	if (rtEmailConfirmed) log("email", `RT email already confirmed, skipping`);
 	else if (!rtToken) await requestEmailVerification(rtAgent);
 	if ((!mainEmailConfirmed && !mainToken) || (!rtEmailConfirmed && !rtToken)) {
-		log("email", `Re-run with tokens to confirm: op run --environment ${OP_ENVIRONMENT} -- npx tsx scripts/provision-account.ts ${channelId} ${youtubeHandle} <mainToken> <rtToken>`);
+		log("email", `Re-run with tokens: npx tsx scripts/provision-account.ts ${channelId} ${youtubeHandle} <mainToken> <rtToken> --environment ${DEPLOYMENT.name}`);
 	}
 
 	// Phase 5: Confirm email addresses.
@@ -569,54 +586,45 @@ async function main() {
 		log("plc", `PLC token sent to ${rtEmail}`);
 	} else log("plc", `RT: email must be confirmed before PLC rotation key can be set`);
 	if ((!mainHasPlcKey && !mainPlcToken) || (!rtHasPlcKey && !rtPlcToken)) {
-		log("plc", `Re-run with PLC tokens: op run --environment ${OP_ENVIRONMENT} -- npx tsx scripts/provision-account.ts ${channelId} ${youtubeHandle} <mainToken> <rtToken> <mainPlcToken> <rtPlcToken>`);
+		log("plc", `Re-run with PLC tokens: npx tsx scripts/provision-account.ts ${channelId} ${youtubeHandle} <mainToken> <rtToken> <mainPlcToken> <rtPlcToken> --environment ${DEPLOYMENT.name}`);
 		log("plc", `  (use - for already-confirmed email tokens)`);
 	}
 
-	// Phase 7: Infrastructure.
+	// Phase 7: publish the account passwords to the selected GitHub Environment.
+	// The deployment workflow copies them into that environment's Secrets Store.
 	backupPasswordTo1Password(mainHandle, mainPassword, mainEmail, state.mainPlcKeyHex!);
 	backupPasswordTo1Password(rtHandle, rtPassword, rtEmail, state.rtPlcKeyHex!);
-	savePasswordToSecretStore(`youtube-mirror-atproto-password-${channelId}`, mainPassword);
-	savePasswordToSecretStore(`youtube-mirror-atproto-password-${channelId}-rt`, rtPassword);
-	updateWranglerBindings(channelId);
-	// Deploy the app-password bindings BEFORE seeding the KV row. The minute cron
-	// discovers `users:{channelId}` the instant it lands, so if KV were seeded first
-	// the first poll could dispatch item workflows whose `passwordKey` bindings aren't
-	// live yet. (The channel workflow's restart-on-terminal-failure path re-runs any
-	// item that erred during the deploy gap, but seeding last avoids the race entirely.)
-	deployViaGit(channelId, youtubeHandle);
+	savePasswordToGitHubEnvironment(`ATPROTO_PASSWORD_${channelId}`, mainPassword);
+	savePasswordToGitHubEnvironment(`ATPROTO_PASSWORD_${channelId}_RT`, rtPassword);
 
-	// Seed KV LAST, and only once the app-password bindings are actually deployed.
-	// Our CD deploys on merge-to-main (gated PR), not on any push — so seeding KV in
-	// the same run would let the minute cron discover `users:{channelId}` and dispatch
-	// item workflows whose `passwordKey` bindings aren't live yet. Gate it behind
-	// --seed-kv: first run creates accounts/secrets + commits bindings; after the PR
-	// merges and deploys, re-run the SAME command with --seed-kv (idempotent no-ops
-	// through the earlier phases) to seed KV and start mirroring race-free.
+	// Seed KV only after the selected deployment has installed and activated the
+	// corresponding Worker bindings. This keeps the poller from observing a user
+	// row before its password bindings exist.
 	if (!flags.includes("--seed-kv")) {
 		log("main", "");
-		log("main", "=== Accounts + secrets provisioned; bindings committed. ===");
-		log("main", `Main: https://bsky.app/profile/${mainHandle}.${PDS_HOST}`);
-		log("main", `RT:   https://bsky.app/profile/${rtHandle}.${PDS_HOST}`);
-		log("main", "");
-		log("main", "Next: open a PR for the pushed branch, merge to main (deploys the bindings),");
-		log("main", "then re-run this SAME command with --seed-kv to seed KV and start mirroring:");
-		log("main", `  npx tsx scripts/provision-account.ts ${channelId} ${youtubeHandle} - - - - --max=${maxItems} --seed-kv`);
+		log("main", `Accounts and ${DEPLOYMENT.name} GitHub secrets are ready.`);
+		log("main", `Deploy ${DEPLOYMENT.name}, then re-run with --seed-kv:`);
+		log("main", `  npx tsx scripts/provision-account.ts ${channelId} ${youtubeHandle} - - - - --environment ${DEPLOYMENT.name} --max=${maxItems} --seed-kv`);
 		return;
 	}
+	const verification = spawnSync(
+		"npx",
+		["tsx", "scripts/verify-environment.ts", "--environment", DEPLOYMENT.name, "--active-secrets", "--bindings"],
+		{ encoding: "utf8", stdio: "inherit", env: cloudflareChildEnv(cloudflareApiToken) },
+	);
+	if (verification.error) throw verification.error;
+	if (verification.status !== 0) {
+		throw new Error(`Refusing to seed ${DEPLOYMENT.name} before its bindings verify`);
+	}
 
-	addKvConfig(channelId, youtubeHandle, mainHandle, rtHandle, mainEmail, rtEmail, maxItems);
+	addKvConfig(channelId, youtubeHandle, mainHandle, rtHandle, mainEmail, rtEmail, maxItems, cloudflareApiToken);
 
 	log("main", "");
-	log("main", "=== Provisioning complete! KV seeded — mirroring starts on next cron. ===");
+	log("main", `Provisioning complete. ${DEPLOYMENT.name} KV is seeded.`);
 	log("main", `Main: https://bsky.app/profile/${mainHandle}.${PDS_HOST}`);
 	log("main", `RT:   https://bsky.app/profile/${rtHandle}.${PDS_HOST}`);
 	log("main", `maxItems cap: ${maxItems}`);
-	log("main", "");
-	log("main", "Passwords saved to secrets store and backed up to 1Password.");
-	log("main", "");
-	log("main", "The channel cron backfills automatically, or trigger the first mirror now with:");
-	log("main", `  op run --environment ${OP_ENVIRONMENT} -- npx wrangler workflows trigger youtube-mirror-channel --config wrangler.mirror-channel.jsonc --id="mirror-${youtubeHandle}-$(date -u +%Y-%m-%dT%H-%M-%S)" --params='{"channelId":"${channelId}"}'`);
+	log("main", "Passwords are in the selected GitHub Environment and the youtube-mirror 1Password vault.");
 }
 
 main().catch((e) => {

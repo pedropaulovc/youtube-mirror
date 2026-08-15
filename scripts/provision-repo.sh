@@ -79,6 +79,42 @@ gh api "repos/$REPO/environments/pr-review-gate" -X PUT --silent --input - <<JSO
 }
 JSON
 
+# ── Isolated deployment environments ───────────────────────────────────────────
+echo "  Configuring production and PPE GitHub Environments ..."
+gh api "repos/$REPO/environments/production" -X PUT --silent --input - <<'JSON'
+{
+  "wait_timer": 0,
+  "prevent_self_review": false,
+  "reviewers": [],
+  "deployment_branch_policy": {
+    "protected_branches": true,
+    "custom_branch_policies": false
+  }
+}
+JSON
+gh api "repos/$REPO/environments/ppe" -X PUT --silent --input - <<'JSON'
+{
+  "wait_timer": 0,
+  "prevent_self_review": false,
+  "reviewers": [],
+  "deployment_branch_policy": null
+}
+JSON
+gh variable set CLOUDFLARE_ACCOUNT_ID --env production --repo "$REPO" --body "c6f17a1f1124bf50cba0f5e495aef9ba"
+gh variable set CLOUDFLARE_ACCOUNT_ID --env ppe --repo "$REPO" --body "b846acaf5be2e542781751bd94a63153"
+gh label create deploy-ppe --repo "$REPO" --color 1d76db \
+  --description "Deploy this pull request to the shared cronless PPE" --force
+
+echo "  Add the remaining environment variables and secrets before deployment."
+echo "  Variables: KV_NAMESPACE_ID SECRETS_STORE_ID WORKERS_DEV_SUBDOMAIN OIDC_ISSUER_URL"
+echo "             TELEMETRY_GATEWAY_ORIGIN OIDC_SIGNING_KID OIDC_PUBLIC_JWK"
+echo "             GCP_WORKLOAD_PROVIDER GCP_SERVICE_ACCOUNT AZURE_TENANT_ID"
+echo "             AZURE_APP_CLIENT_ID OTLP_TRACES_ENDPOINT OTLP_METRICS_ENDPOINT"
+echo "             OTLP_LOGS_ENDPOINT MIRROR_CHANNEL_IDS ENABLE_SCHEDULES"
+echo "  Secrets:   CLOUDFLARE_API_TOKEN OIDC_SIGNING_KEY FIRECRAWL_API_TOKEN"
+echo "             ATPROTO_PASSWORD_<channelId> ATPROTO_PASSWORD_<channelId>_RT"
+echo "             GATEWAY_INGEST_BEARER"
+
 # ── Branch ruleset: Protect main ───────────────────────────────────────────────
 upsert_ruleset "Protect main" <<'JSON'
 {

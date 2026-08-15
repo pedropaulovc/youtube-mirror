@@ -1,58 +1,38 @@
-/**
- * Manually re-mirror a single YouTube item by triggering one MirrorItemWorkflow
- * instance via the Cloudflare Workflows REST API. For manual ops / debugging only.
- *
- * The workflow hydrates the item from this `{channelId, kind, itemId}` reference
- * (it reads the ChannelConfig from KV and re-fetches the item from YouTube/Firecrawl),
- * so the payload below is exactly what it expects.
- *
- * Requirements:
- *   - CLOUDFLARE_API_TOKEN env var (Workflows edit permission).
- *   - ACCOUNT_ID below must be set to your Cloudflare account ID.
- *   - The channel's ChannelConfig must already be seeded in KV
- *     (`users:{channelId}` — see scripts/seed-channel.ts); the workflow reads it.
- *
- * Usage:
- *   CLOUDFLARE_API_TOKEN=... npx tsx scripts/mirror-item.ts <channelId> <kind> <itemId>
- *   # kind ∈ { video | community }
- *   # comments carry parent/video context only the poller has — re-run the channel
- *   # poll to re-mirror them; a manual comment trigger is rejected by the workflow.
- */
-import process from "node:process";
 import { ensureOpEnv } from "./op-bootstrap.js";
+import { environmentFromArgs, parseDeploymentEnvironment } from "./deployment-environment.js";
 
-// Self-source CLOUDFLARE_API_TOKEN from the 1Password environment (re-execs under
-// `op run` if it isn't already in the env), so this runs standalone.
+const rawArgs = process.argv.slice(2);
+const selected = environmentFromArgs(rawArgs);
+const args = [...rawArgs];
+args.splice(args.indexOf("--environment"), 2);
+process.env.DEPLOY_ENVIRONMENT = selected;
 ensureOpEnv(["CLOUDFLARE_API_TOKEN"]);
-
-const ACCOUNT_ID = "REPLACE_WITH_YOUR_CLOUDFLARE_ACCOUNT_ID";
-// Must match the deployed workflow name in wrangler.mirror-item.jsonc, not the
-// test-config name ("mirror-item").
-const WORKFLOW_NAME = "youtube-mirror-item";
-
+const environment = parseDeploymentEnvironment(process.env, selected);
+const [channelId, kind, itemId] = args.filter((argument) => !argument.startsWith("--"));
 const token = process.env.CLOUDFLARE_API_TOKEN;
-const [channelId, kind, itemId] = process.argv.slice(2);
 
-if (!token) {
-	console.error("CLOUDFLARE_API_TOKEN env var is required.");
-	process.exit(1);
+if (!token) throw new Error("CLOUDFLARE_API_TOKEN is required");
+if (!channelId || !kind || !itemId || (kind !== "video" && kind !== "community")) {
+	throw new Error(
+		"Usage: npx tsx scripts/mirror-item.ts <channelId> <video|community> <itemId> --environment production|ppe",
+	);
 }
-if (!channelId || !kind || !itemId) {
-	console.error("Usage: npx tsx scripts/mirror-item.ts <channelId> <kind> <itemId>");
-	process.exit(1);
+if (!environment.channelIds.includes(channelId)) {
+	throw new Error(`${channelId} is not listed in the ${environment.name} MIRROR_CHANNEL_IDS variable`);
 }
 
-const url = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/workflows/${WORKFLOW_NAME}/instances`;
-
-const res = await fetch(url, {
-	method: "POST",
-	headers: {
-		Authorization: `Bearer ${token}`,
-		"Content-Type": "application/json",
+const response = await fetch(
+	`https://api.cloudflare.com/client/v4/accounts/${environment.accountId}/workflows/youtube-mirror-item/instances`,
+	{
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${token}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({ params: { channelId, kind, itemId } }),
+		signal: AbortSignal.timeout(30_000),
 	},
-	body: JSON.stringify({ params: { channelId, kind, itemId } }),
-});
-
-const body = await res.json();
+);
+const body: unknown = await response.json();
 console.log(JSON.stringify(body, null, 2));
-if (!res.ok) process.exit(1);
+if (!response.ok) process.exitCode = 1;

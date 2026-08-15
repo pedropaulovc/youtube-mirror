@@ -1,76 +1,100 @@
-/**
- * Seed a channel config into the production KV namespace.
- *
- * Usage:
- *   npx tsx scripts/seed-channel.ts <channelId> <handle> <mainAtprotoAccount> <rtAtprotoAccount> [--env <name>] [--commit]
- *
- * Without --commit this prints the JSON and the `wrangler kv key put` command it
- * WOULD run (dry preview). With --commit it actually invokes wrangler — you must
- * have valid Cloudflare credentials (CLOUDFLARE_API_TOKEN / wrangler login).
- */
-import { execSync } from "node:child_process";
-import process from "node:process";
+import { execFileSync } from "node:child_process";
+import { writeFileSync, unlinkSync } from "node:fs";
 import { ensureOpEnv } from "./op-bootstrap.js";
+import { environmentFromArgs, parseDeploymentEnvironment } from "./deployment-environment.js";
 
-// Minimal inline copy of worker/types.ts (kept standalone — no worker/ import).
 interface BlueskyAccountConfig {
 	passwordKey: string;
 	atProtoAccount: string;
 	email: string;
 }
+
 interface ChannelConfig {
 	main: BlueskyAccountConfig;
 	rt: BlueskyAccountConfig;
 	handle: string;
-	maxItems?: number;
-	pollIntervalMinutes?: number;
-	mirrorComments?: boolean;
-	mirrorCommunity?: boolean;
+	uploadsPlaylistId: string;
+	mirrorComments: boolean;
+	mirrorCommunity: boolean;
 }
 
-const args = process.argv.slice(2);
+const rawArgs = process.argv.slice(2);
+const selected = environmentFromArgs(rawArgs);
+const args = [...rawArgs];
+args.splice(args.indexOf("--environment"), 2);
 const commit = args.includes("--commit");
-// Only the --commit path calls wrangler against production; self-source the CF token
-// from the 1Password environment then (re-execs under `op run` if it isn't set). The
-// dry preview needs no credentials.
+const positional = args.filter((argument) => !argument.startsWith("--"));
+process.env.DEPLOY_ENVIRONMENT = selected;
 if (commit) ensureOpEnv(["CLOUDFLARE_API_TOKEN"]);
-const envIdx = args.indexOf("--env");
-if (envIdx !== -1) args.splice(envIdx, 2); // --env <name> (unused for now)
-const positional = args.filter((a) => !a.startsWith("--"));
-const [channelId, handle, mainAtProtoAccount, rtAtProtoAccount] = positional;
+const environment = parseDeploymentEnvironment(process.env, selected);
+const [channelId, handle, mainAtProtoAccount, rtAtProtoAccount, mainEmail, rtEmail] = positional;
 
-if (!channelId || !handle || !mainAtProtoAccount || !rtAtProtoAccount) {
+if (!channelId || !handle || !mainAtProtoAccount || !rtAtProtoAccount || !mainEmail || !rtEmail) {
 	console.error(
-		"Usage: npx tsx scripts/seed-channel.ts <channelId> <handle> <mainAtprotoAccount> <rtAtprotoAccount> [--env <name>] [--commit]",
+		"Usage: npx tsx scripts/seed-channel.ts <channelId> <handle> <mainAtprotoAccount> <rtAtprotoAccount> <mainEmail> <rtEmail> --environment production|ppe [--commit]",
 	);
 	process.exit(1);
+}
+if (!environment.channelIds.includes(channelId)) {
+	throw new Error(`${channelId} is not listed in the ${environment.name} MIRROR_CHANNEL_IDS variable`);
+}
+if (
+	environment.name === "ppe" &&
+	(!mainAtProtoAccount.includes("-ppe-") || !rtAtProtoAccount.includes("-ppe-"))
+) {
+	throw new Error("PPE Bluesky account handles must contain -ppe-; production accounts cannot be seeded into PPE");
 }
 
 const config: ChannelConfig = {
 	main: {
 		passwordKey: `youtube-mirror-atproto-password-${channelId}`,
 		atProtoAccount: mainAtProtoAccount,
-		email: `${handle}@example.com`,
+		email: mainEmail,
 	},
 	rt: {
 		passwordKey: `youtube-mirror-atproto-password-${channelId}-rt`,
 		atProtoAccount: rtAtProtoAccount,
-		email: `${handle}-rt@example.com`,
+		email: rtEmail,
 	},
-	handle,
+	handle: handle.replace(/^@/, ""),
+	uploadsPlaylistId: channelId.startsWith("UC") ? `UU${channelId.slice(2)}` : channelId,
 	mirrorComments: true,
 	mirrorCommunity: true,
 };
 
-const json = JSON.stringify(config);
-const cmd = `wrangler kv key put "users:${channelId}" '${json}' --binding KV --remote --config wrangler.mirror-channel.jsonc`;
+console.log(`${environment.name} ChannelConfig:\n${JSON.stringify(config, null, 2)}`);
+console.log(`\nTarget account: ${environment.accountId}`);
+console.log(`Target KV namespace: ${environment.kvNamespaceId}`);
 
-console.log("ChannelConfig:\n" + JSON.stringify(config, null, 2));
-console.log("\nCommand:\n" + cmd);
-
-if (commit) {
-	console.log("\nRunning (requires real Cloudflare credentials)...");
-	execSync(cmd, { stdio: "inherit" });
+if (!commit) {
+	console.log("\nDry preview only. Re-run with --commit after the selected environment's bindings verify.");
 } else {
-	console.log("\n(dry preview — re-run with --commit and real credentials to apply)");
+	const verification = execFileSync(
+		"npx",
+		["tsx", "scripts/verify-environment.ts", "--environment", environment.name, "--active-secrets", "--bindings"],
+		{ stdio: "inherit", env: process.env },
+	);
+	void verification;
+	const temporaryPath = `scripts/.tmp-kv-${environment.name}-${channelId}.json`;
+	writeFileSync(temporaryPath, JSON.stringify(config));
+	try {
+		execFileSync(
+			"npx",
+			[
+				"wrangler",
+				"kv",
+				"key",
+				"put",
+				"--namespace-id",
+				environment.kvNamespaceId,
+				`users:${channelId}`,
+				"--path",
+				temporaryPath,
+				"--remote",
+			],
+			{ stdio: "inherit", env: process.env },
+		);
+	} finally {
+		unlinkSync(temporaryPath);
+	}
 }
