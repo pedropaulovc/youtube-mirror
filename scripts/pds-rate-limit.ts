@@ -64,6 +64,15 @@ export function isPdsRateLimitError(error: unknown): boolean {
 	return retryAfterHeader(error) !== null;
 }
 
+interface LoginReservation {
+	timestamp: number;
+}
+
+interface SlotAvailability {
+	reservation: LoginReservation | null;
+	waitMs: number;
+}
+
 export class PdsRateLimiter {
 	private readonly loginLimit: number;
 	private readonly windowMs: number;
@@ -73,7 +82,8 @@ export class PdsRateLimiter {
 	private readonly now: () => number;
 	private readonly sleep: (milliseconds: number) => Promise<void>;
 	private readonly log?: (message: string) => void;
-	private readonly loginTimestamps: number[] = [];
+	private readonly loginReservations: LoginReservation[] = [];
+	private slotQueue: Promise<void> = Promise.resolve();
 
 	constructor(options: PdsRateLimiterOptions = {}) {
 		this.loginLimit = options.loginLimit ?? DEFAULT_LOGIN_LIMIT;
@@ -94,16 +104,17 @@ export class PdsRateLimiter {
 
 	async login(loginRequest: () => Promise<void>): Promise<void> {
 		for (let retry = 0; ; retry++) {
-			await this.waitForLoginSlot();
+			const reservation = await this.reserveLoginSlot();
 			try {
 				await loginRequest();
 				return;
 			} catch (error: unknown) {
 				if (!isPdsRateLimitError(error) || retry >= this.maxRetries) throw error;
-				this.loginTimestamps.pop();
+				await this.releaseLoginSlot(reservation);
 				const retryAfterMs = getRetryAfterMs(error, this.now()) ?? 0;
+				const serverDelayMs = Math.min(retryAfterMs, this.maxRetryMs);
 				const backoffMs = Math.min(this.maxRetryMs, this.minRetryMs * 2 ** retry);
-				const waitMs = Math.max(retryAfterMs, backoffMs);
+				const waitMs = Math.max(serverDelayMs, backoffMs);
 				this.log?.(
 					`PDS returned 429, retry ${retry + 1}/${this.maxRetries} in ${Math.ceil(waitMs / 1_000)}s...`,
 				);
@@ -112,23 +123,50 @@ export class PdsRateLimiter {
 		}
 	}
 
-	private async waitForLoginSlot(): Promise<void> {
-		this.purgeExpiredLogins();
-		if (this.loginTimestamps.length >= this.loginLimit) {
-			const waitMs = this.loginTimestamps[0]! + this.windowMs - this.now() + 1_000;
+	private async reserveLoginSlot(): Promise<LoginReservation> {
+		for (; ;) {
+			const availability = await this.withSlotLock((): SlotAvailability => {
+				this.purgeExpiredLogins();
+				const oldest = this.loginReservations[0];
+				if (oldest && this.loginReservations.length >= this.loginLimit) {
+					const waitMs = Math.max(1, oldest.timestamp + this.windowMs - this.now() + 1_000);
+					return { reservation: null, waitMs };
+				}
+				const reservation = { timestamp: this.now() };
+				this.loginReservations.push(reservation);
+				return { reservation, waitMs: 0 };
+			});
+			if (availability.reservation) return availability.reservation;
 			this.log?.(
-				`PDS login limit reached (${this.loginLimit}/${this.windowMs / 60_000}min), waiting ${Math.ceil(waitMs / 1_000)}s...`,
+				`PDS login limit reached (${this.loginLimit}/${this.windowMs / 60_000}min), waiting ${Math.ceil(availability.waitMs / 1_000)}s...`,
 			);
-			await this.sleep(waitMs);
-			this.purgeExpiredLogins();
+			await this.sleep(availability.waitMs);
 		}
-		this.loginTimestamps.push(this.now());
+	}
+
+	private async releaseLoginSlot(reservation: LoginReservation): Promise<void> {
+		await this.withSlotLock(() => {
+			const index = this.loginReservations.indexOf(reservation);
+			if (index >= 0) this.loginReservations.splice(index, 1);
+		});
+	}
+
+	private async withSlotLock<T>(operation: () => T | PromiseLike<T>): Promise<T> {
+		const previous = this.slotQueue;
+		const { promise, resolve } = Promise.withResolvers<void>();
+		this.slotQueue = promise;
+		await previous;
+		try {
+			return await operation();
+		} finally {
+			resolve();
+		}
 	}
 
 	private purgeExpiredLogins(): void {
 		const cutoff = this.now() - this.windowMs;
-		while (this.loginTimestamps.length > 0 && this.loginTimestamps[0]! <= cutoff) {
-			this.loginTimestamps.shift();
+		while (this.loginReservations.length > 0 && this.loginReservations[0]!.timestamp <= cutoff) {
+			this.loginReservations.shift();
 		}
 	}
 }

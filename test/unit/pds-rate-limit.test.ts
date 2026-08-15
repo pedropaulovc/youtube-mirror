@@ -35,6 +35,74 @@ describe("PdsRateLimiter", () => {
 		expect(waits).toEqual([100, 200, 250]);
 	});
 
+	it("rechecks full windows for overlapping logins", async () => {
+		const firstStarted = Promise.withResolvers<void>();
+		const firstGate = Promise.withResolvers<void>();
+		const firstWaitStarted = Promise.withResolvers<void>();
+		const secondWaitStarted = Promise.withResolvers<"started">();
+		const releaseSlotWaiters = Promise.withResolvers<void>();
+		const waits: number[] = [];
+		let now = 0;
+		let sleepCalls = 0;
+		let active = 0;
+		let maxActive = 0;
+		let firstAttempts = 0;
+
+		const limiter = new PdsRateLimiter({
+			loginLimit: 1,
+			windowMs: 1_000,
+			minRetryMs: 1,
+			maxRetryMs: 1,
+			maxRetries: 1,
+			now: () => now,
+			sleep: async (milliseconds) => {
+				waits.push(milliseconds);
+				sleepCalls++;
+				if (sleepCalls === 1) {
+					firstWaitStarted.resolve();
+					return;
+				}
+				if (sleepCalls === 2) {
+					secondWaitStarted.resolve("started");
+					await releaseSlotWaiters.promise;
+					return;
+				}
+				now += milliseconds;
+			},
+			log: (message) => {
+				if (message.startsWith("PDS returned 429")) releaseSlotWaiters.resolve();
+			},
+		});
+
+		const first = limiter.login(async () => {
+			firstAttempts++;
+			active++;
+			maxActive = Math.max(maxActive, active);
+			firstStarted.resolve();
+			if (firstAttempts === 1) {
+				await firstGate.promise;
+				active--;
+				throw rateLimitError("0");
+			}
+			active--;
+		});
+		await firstStarted.promise;
+
+		const second = limiter.login(async () => {
+			active++;
+			maxActive = Math.max(maxActive, active);
+			active--;
+		});
+		await firstWaitStarted.promise;
+		await secondWaitStarted.promise;
+
+		firstGate.resolve();
+		await Promise.all([first, second]);
+
+		expect(waits[0]).toBe(2_000);
+		expect(waits).toContain(1);
+	});
+
 	it("honors a server delay larger than local backoff", async () => {
 		const waits: number[] = [];
 		let attempts = 0;
