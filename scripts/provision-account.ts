@@ -1,6 +1,6 @@
-import { execSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { chromium } from "playwright";
 import { AtpAgent } from "@atproto/api";
 import type { ChannelConfig } from "../worker/types.js";
@@ -13,6 +13,9 @@ const SCRIPT_ARGS = [...RAW_ARGS];
 SCRIPT_ARGS.splice(SCRIPT_ARGS.indexOf("--environment"), 2);
 process.env.DEPLOY_ENVIRONMENT = DEPLOYMENT_NAME;
 ensureOpEnv(["CLOUDFLARE_API_TOKEN"]);
+const cloudflareApiToken = process.env.CLOUDFLARE_API_TOKEN;
+if (!cloudflareApiToken) throw new Error("CLOUDFLARE_API_TOKEN is required");
+delete process.env.CLOUDFLARE_API_TOKEN;
 const DEPLOYMENT = parseDeploymentEnvironment(process.env, DEPLOYMENT_NAME);
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -85,8 +88,42 @@ function log(phase: string, msg: string) {
 	console.log(`[${phase}] ${msg}`);
 }
 
-function run(cmd: string): string {
-	return execSync(cmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+const MAX_CHILD_DIAGNOSTIC_LENGTH = 1_000;
+
+function sanitizedChildEnv(): NodeJS.ProcessEnv {
+	const env = { ...process.env };
+	delete env.CLOUDFLARE_API_TOKEN;
+	return env;
+}
+
+function cloudflareChildEnv(apiToken: string): NodeJS.ProcessEnv {
+	const env = sanitizedChildEnv();
+	env.CLOUDFLARE_API_TOKEN = apiToken;
+	return env;
+}
+
+function runWrangler(args: readonly string[], apiToken: string, input?: string): string {
+	const result = spawnSync("npx", ["wrangler", ...args], {
+		input,
+		encoding: "utf8",
+		stdio: ["pipe", "pipe", "pipe"],
+		env: cloudflareChildEnv(apiToken),
+	});
+	if (result.status !== 0) {
+		const details = sanitizeDiagnostic(result.stderr.toString());
+		throw new Error(
+			`Wrangler command failed (exit ${result.status ?? "unknown"}${details ? `: ${details}` : ""})`,
+		);
+	}
+	return result.stdout.toString().trim();
+}
+
+function sanitizeDiagnostic(output: string): string {
+	return output
+		.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
+		.replace(/((?:["']?(?:token|secret|password|credential)["']?)\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)/gi, "$1[REDACTED]")
+		.trim()
+		.slice(0, MAX_CHILD_DIAGNOSTIC_LENGTH);
 }
 
 
@@ -322,22 +359,55 @@ function backupPasswordTo1Password(handle: string, password: string, email: stri
 	const fullHandle = `${handle}.${PDS_HOST}`;
 	const plcDidKey = privateKeyHexToDidKey(plcKeyHex);
 	try {
-		run(`op item get "${fullHandle}" --vault ${BACKUP_VAULT} --format json`);
+		runOp(["item", "get", fullHandle, "--vault", BACKUP_VAULT, "--format", "json"]);
 		log("1password", `${fullHandle} already exists, updating PLC key fields`);
-		execSync(
-			`op item edit "${fullHandle}" --vault ${BACKUP_VAULT} "plc_rotation_key_hex[password]=${plcKeyHex}" "plc_rotation_key_did[text]=${plcDidKey}"`,
-			{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-		);
+		runOp([
+			"item",
+			"edit",
+			fullHandle,
+			"--vault",
+			BACKUP_VAULT,
+			`plc_rotation_key_hex[password]=${plcKeyHex}`,
+			`plc_rotation_key_did[text]=${plcDidKey}`,
+		]);
 		return;
 	} catch {
 		// Item doesn't exist, create it
 	}
 	log("1password", `Saving ${fullHandle} to ${BACKUP_VAULT} vault`);
-	execSync(
-		`op item create --category login --vault ${BACKUP_VAULT} --title "${fullHandle}" --url https://bsky.app "username=${fullHandle}" "password=${password}" "email=${email}" "plc_rotation_key_hex[password]=${plcKeyHex}" "plc_rotation_key_did[text]=${plcDidKey}"`,
-		{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-	);
+	runOp([
+		"item",
+		"create",
+		"--category",
+		"login",
+		"--vault",
+		BACKUP_VAULT,
+		"--title",
+		fullHandle,
+		"--url",
+		"https://bsky.app",
+		`username=${fullHandle}`,
+		`password=${password}`,
+		`email=${email}`,
+		`plc_rotation_key_hex[password]=${plcKeyHex}`,
+		`plc_rotation_key_did[text]=${plcDidKey}`,
+	]);
 }
+
+function runOp(args: readonly string[], input?: string): string {
+	const result = spawnSync("op", args, {
+		input,
+		encoding: "utf8",
+		stdio: ["pipe", "pipe", "pipe"],
+		env: sanitizedChildEnv(),
+	});
+	if (result.status !== 0) {
+		const details = sanitizeDiagnostic(result.stderr.toString());
+		throw new Error(`1Password command failed${details ? `: ${details}` : ""}`);
+	}
+	return result.stdout.toString().trim();
+}
+
 
 function savePasswordToGitHubEnvironment(name: string, password: string): void {
 	const result = spawnSync("gh", ["secret", "set", name, "--env", DEPLOYMENT.name], {
@@ -351,8 +421,6 @@ function savePasswordToGitHubEnvironment(name: string, password: string): void {
 	}
 	log("github", `Updated ${name} in the ${DEPLOYMENT.name} GitHub Environment`);
 }
-
-
 function addKvConfig(
 	channelId: string,
 	youtubeHandle: string,
@@ -361,6 +429,7 @@ function addKvConfig(
 	mainEmail: string,
 	rtEmail: string,
 	maxItems: number,
+	apiToken: string,
 ): void {
 	const config: ChannelConfig = {
 		main: {
@@ -384,9 +453,27 @@ function addKvConfig(
 	// --path avoids Windows/WSL shell quoting mangling the JSON.
 	const tmpFile = `scripts/.tmp-kv-${DEPLOYMENT.name}-${channelId}.json`;
 	writeFileSync(tmpFile, JSON.stringify(config));
-	log("kv", `Writing users:${channelId} to KV`);
-	run(`npx wrangler kv key put --namespace-id=${KV_NAMESPACE_ID} "users:${channelId}" --path=${tmpFile} --remote`);
-	try { execSync(`rm ${tmpFile}`); } catch { /* ignore */ }
+	try {
+		log("kv", `Writing users:${channelId} to KV`);
+		runWrangler(
+			[
+				"kv",
+				"key",
+				"put",
+				`--namespace-id=${KV_NAMESPACE_ID}`,
+				`users:${channelId}`,
+				`--path=${tmpFile}`,
+				"--remote",
+			],
+			apiToken,
+		);
+	} finally {
+		try {
+			unlinkSync(tmpFile);
+		} catch {
+			// Ignore cleanup failures after the write result is known.
+		}
+	}
 }
 
 
@@ -523,14 +610,14 @@ async function main() {
 	const verification = spawnSync(
 		"npx",
 		["tsx", "scripts/verify-environment.ts", "--environment", DEPLOYMENT.name, "--active-secrets", "--bindings"],
-		{ encoding: "utf8", stdio: "inherit", env: process.env },
+		{ encoding: "utf8", stdio: "inherit", env: cloudflareChildEnv(cloudflareApiToken) },
 	);
 	if (verification.error) throw verification.error;
 	if (verification.status !== 0) {
 		throw new Error(`Refusing to seed ${DEPLOYMENT.name} before its bindings verify`);
 	}
 
-	addKvConfig(channelId, youtubeHandle, mainHandle, rtHandle, mainEmail, rtEmail, maxItems);
+	addKvConfig(channelId, youtubeHandle, mainHandle, rtHandle, mainEmail, rtEmail, maxItems, cloudflareApiToken);
 
 	log("main", "");
 	log("main", `Provisioning complete. ${DEPLOYMENT.name} KV is seeded.`);
