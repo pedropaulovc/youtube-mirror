@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { parseConfigFileTextToJson } from "typescript";
-import { renderConfig } from "./deployment-config.js";
+import { renderConfigForDirectory } from "./deployment-config.js";
 import { environmentFromArgs, parseDeploymentEnvironment } from "./deployment-environment.js";
 
 const CONFIG_FILES = [
@@ -26,7 +26,8 @@ async function main(): Promise<void> {
 			throw new Error(`Could not parse ${configPath} as JSONC`);
 		}
 		const outputPath = join(outputDirectory, basename(configPath));
-		await writeFile(outputPath, `${JSON.stringify(renderConfig(configPath, parsed.config, environment), null, "\t")}\n`);
+		const rendered = renderConfigForDirectory(configPath, parsed.config, environment, outputDirectory);
+		await writeFile(outputPath, `${JSON.stringify(rendered, null, "\t")}\n`);
 		console.log(outputPath);
 	}
 }
