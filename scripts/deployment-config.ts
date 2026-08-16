@@ -1,3 +1,4 @@
+import { isAbsolute, join, relative, sep } from "node:path";
 import type { DeploymentEnvironment } from "./deployment-environment.js";
 
 const CONTENT_CONFIGS = new Set([
@@ -13,6 +14,17 @@ const FIRECRAWL_CONFIGS = new Set([
 
 export interface JsonObject {
 	[key: string]: unknown;
+}
+
+export function rebaseConfigMain(config: JsonObject, outputDirectory: string): JsonObject {
+	const main = config.main;
+	if (typeof main !== "string" || isAbsolute(main)) return config;
+
+	const repoRelativePath = relative(outputDirectory, ".");
+	return {
+		...config,
+		main: join(repoRelativePath, main).split(sep).join("/"),
+	};
 }
 
 function secretBinding(binding: string, storeId: string, secretName = binding): JsonObject {
@@ -90,4 +102,13 @@ export function renderConfig(
 		];
 	}
 	return rendered;
+}
+
+export function renderConfigForDirectory(
+	configPath: string,
+	base: JsonObject,
+	environment: DeploymentEnvironment,
+	outputDirectory: string,
+): JsonObject {
+	return rebaseConfigMain(renderConfig(configPath, base, environment), outputDirectory);
 }

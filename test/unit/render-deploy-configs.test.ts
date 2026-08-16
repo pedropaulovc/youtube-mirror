@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DeploymentEnvironment } from "../../scripts/deployment-environment";
-import { renderConfig } from "../../scripts/deployment-config";
+import { renderConfig, renderConfigForDirectory } from "../../scripts/deployment-config";
 
 const environment: DeploymentEnvironment = {
 	name: "ppe",
@@ -73,5 +73,18 @@ describe("renderConfig", () => {
 				secret_name: "youtube-mirror-oidc-signing-key",
 			},
 		]);
+	});
+	it("renders Worker configs with entrypoints rooted at the repository", () => {
+		const rendered = renderConfigForDirectory(
+			"wrangler.mirror-oidc-issuer.jsonc",
+			{ name: "youtube-mirror-oidc-issuer", main: "worker/oidc-issuer.ts" },
+			environment,
+			".wrangler/deploy/production",
+		);
+
+		expect(rendered).toMatchObject({
+			account_id: environment.accountId,
+			main: "../../../worker/oidc-issuer.ts",
+		});
 	});
 });
