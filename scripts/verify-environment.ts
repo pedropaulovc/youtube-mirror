@@ -10,6 +10,7 @@ import {
 const PER_PAGE = 100;
 const DEADLINE_MS = 60_000;
 const POLL_INTERVAL_MS = 2_000;
+const ISSUER_REQUEST_TIMEOUT_MS = 10_000;
 
 type JsonObject = Record<string, unknown>;
 
@@ -170,11 +171,11 @@ async function verifyDeployedBindings(
 	const requirements: ReadonlyArray<
 		readonly [string, ReadonlyArray<readonly [string, string]>]
 	> = [
-		["youtube-mirror-channel", [oidcBinding, firecrawlBinding, ...passwordBindings]],
-		["youtube-mirror-item", [oidcBinding, firecrawlBinding, ...passwordBindings]],
-		["youtube-mirror-delete", [oidcBinding, ...passwordBindings]],
-		["youtube-mirror-profile", [oidcBinding, ...passwordBindings]],
-	];
+			["youtube-mirror-channel", [oidcBinding, firecrawlBinding, ...passwordBindings]],
+			["youtube-mirror-item", [oidcBinding, firecrawlBinding, ...passwordBindings]],
+			["youtube-mirror-delete", [oidcBinding, ...passwordBindings]],
+			["youtube-mirror-profile", [oidcBinding, ...passwordBindings]],
+		];
 	const headers = { Authorization: `Bearer ${token}` };
 
 	for (const [worker, expectedSecrets] of requirements) {
@@ -224,26 +225,48 @@ function publicJwkMatches(actual: unknown, expected: PublicRsaJwk): boolean {
 	);
 }
 
+async function requestIssuerJson(url: string, deadline: number): Promise<JsonObject> {
+	let lastFailure = "request failed";
+	while (Date.now() < deadline) {
+		const remaining = deadline - Date.now();
+		try {
+			const response = await fetch(url, {
+				signal: AbortSignal.timeout(Math.min(remaining, ISSUER_REQUEST_TIMEOUT_MS)),
+			});
+			let payload: unknown;
+			try {
+				payload = await response.json();
+			} catch {
+				lastFailure = `non-JSON HTTP ${response.status}`;
+			}
+			if (response.ok && isObject(payload)) return payload;
+			if (payload !== undefined) lastFailure = `HTTP ${response.status}`;
+		} catch (error: unknown) {
+			lastFailure = error instanceof Error ? error.message : "request failed";
+		}
+
+		const wait = Math.min(POLL_INTERVAL_MS, deadline - Date.now());
+		if (wait <= 0) break;
+		await delay(wait);
+	}
+	throw new Error(`OIDC verification exceeded its shared deadline (${lastFailure})`);
+}
+
 async function verifyIssuer(environment: DeploymentEnvironment, deadline: number): Promise<void> {
-	const discoveryResponse = await fetch(`${environment.issuerUrl}/.well-known/openid-configuration`, {
-		signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
-	});
-	const discovery: unknown = await discoveryResponse.json();
+	const discovery = await requestIssuerJson(
+		`${environment.issuerUrl}/.well-known/openid-configuration`,
+		deadline,
+	);
 	if (
-		!discoveryResponse.ok ||
-		!isObject(discovery) ||
 		discovery.issuer !== environment.issuerUrl ||
+		typeof discovery.jwks_uri !== "string" ||
 		discovery.jwks_uri !== `${environment.issuerUrl}/.well-known/jwks.json`
 	) {
 		throw new Error("OIDC discovery does not match the selected environment origin");
 	}
-	const jwksResponse = await fetch(discovery.jwks_uri, {
-		signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
-	});
-	const jwks: unknown = await jwksResponse.json();
+
+	const jwks = await requestIssuerJson(discovery.jwks_uri, deadline);
 	if (
-		!jwksResponse.ok ||
-		!isObject(jwks) ||
 		!Array.isArray(jwks.keys) ||
 		jwks.keys.length !== 1 ||
 		!publicJwkMatches(jwks.keys[0], environment.oidcPublicJwk)
