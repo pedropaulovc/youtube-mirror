@@ -40,6 +40,7 @@ There is no generic deploy command. The deploy scripts require an explicit envir
 | PPE | `b846acaf5be2e542781751bd94a63153` | `ppe` | Independent PPE resources and `-ppe-` Bluesky accounts; no production KV or passwords |
 
 The committed Wrangler files contain the stable Worker and Workflow structure. CI reads resource IDs, workers.dev origins, JWK/kid, federation targets, and schedule state from the selected GitHub Environment. It renders complete files under `.wrangler/deploy`, which Git ignores.
+ATProto account passwords are backed up in the `youtube-mirror` 1Password vault and retained for account recovery and deprovisioning, then written directly to the selected Cloudflare Secrets Store during provisioning. CI does not receive plaintext passwords; it verifies active Store metadata and deployed bindings. Deployment sync continues to handle `OIDC_SIGNING_KEY` and `FIRECRAWL_API_TOKEN` from the selected GitHub Environment.
 
 Deployment is ordered: issuer, gateway secret and gateway, observability destinations, item, delete and profile, then channel. Channel is last because its cron activates polling. Secrets Store verification reads every page and waits under one bounded deadline until all required entries are active.
 

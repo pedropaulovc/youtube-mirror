@@ -118,7 +118,7 @@ function archive1PasswordItem(handle: string): void {
 	}
 }
 
-function removeGitHubEnvironmentAccount(channelId: string): void {
+function removeLegacyGitHubEnvironmentAccount(channelId: string): void {
 	for (const name of [`ATPROTO_PASSWORD_${channelId}`, `ATPROTO_PASSWORD_${channelId}_RT`]) {
 		try {
 			run(`gh secret delete "${name}" --env "${DEPLOYMENT.name}"`);
@@ -195,7 +195,7 @@ function bulkDeleteKvKeys(prefix: string): number {
 
 	const allKeys: string[] = [];
 	let cursor: string | undefined;
-	for (;;) {
+	for (; ;) {
 		const url = `${base}/keys?prefix=${encodeURIComponent(prefix)}&limit=1000${cursor ? `&cursor=${cursor}` : ""}`;
 		const res = JSON.parse(run(`curl -s "${url}" -H "Authorization: Bearer ${cfToken}"`));
 		for (const k of res.result ?? []) allKeys.push(k.name);
@@ -282,11 +282,11 @@ async function main() {
 	archive1PasswordItem(mainAccount);
 	archive1PasswordItem(rtAccount);
 
-	// Phase 4: Delete Cloudflare Secrets Store secrets.
+	// Remove the Store entries and any legacy GitHub copies from the pre-migration flow.
 	log("main", "Phase 4: Deleting secrets store secrets...");
 	deleteSecretStoreSecret(config.main.passwordKey);
 	deleteSecretStoreSecret(config.rt.passwordKey);
-	removeGitHubEnvironmentAccount(channelId);
+	removeLegacyGitHubEnvironmentAccount(channelId);
 
 	// Phase 5: Delete KV records.
 	log("main", "Phase 5: Cleaning up KV...");

@@ -105,15 +105,19 @@ gh variable set CLOUDFLARE_ACCOUNT_ID --env ppe --repo "$REPO" --body "b846acaf5
 gh label create deploy-ppe --repo "$REPO" --color 1d76db \
   --description "Deploy this pull request to the shared cronless PPE" --force
 
-echo "  Add the remaining environment variables and secrets before deployment."
+echo "  Add the remaining environment variables and deployment secrets before deployment."
 echo "  Variables: KV_NAMESPACE_ID SECRETS_STORE_ID WORKERS_DEV_SUBDOMAIN OIDC_ISSUER_URL"
 echo "             TELEMETRY_GATEWAY_ORIGIN OIDC_SIGNING_KID OIDC_PUBLIC_JWK"
 echo "             GCP_WORKLOAD_PROVIDER GCP_SERVICE_ACCOUNT AZURE_TENANT_ID"
 echo "             AZURE_APP_CLIENT_ID OTLP_TRACES_ENDPOINT OTLP_METRICS_ENDPOINT"
 echo "             OTLP_LOGS_ENDPOINT MIRROR_CHANNEL_IDS ENABLE_SCHEDULES"
 echo "  Secrets:   CLOUDFLARE_API_TOKEN OIDC_SIGNING_KEY FIRECRAWL_API_TOKEN"
-echo "             ATPROTO_PASSWORD_<channelId> ATPROTO_PASSWORD_<channelId>_RT"
 echo "             GATEWAY_INGEST_BEARER"
+echo "  ATProto account passwords: back up in the youtube-mirror 1Password vault"
+echo "             and retain for account recovery and deprovisioning; write directly"
+echo "             to the selected Cloudflare Secrets Store during account provisioning."
+echo "             CI verifies active Store metadata/bindings and never receives"
+echo "             plaintext ATProto passwords."
 
 # ── Branch ruleset: Protect main ───────────────────────────────────────────────
 upsert_ruleset "Protect main" <<'JSON'

@@ -7,6 +7,8 @@ import type { ChannelConfig } from "../worker/types.js";
 import { ensureOpEnv } from "./op-bootstrap.js";
 import { environmentFromArgs, parseDeploymentEnvironment } from "./deployment-environment.js";
 import { PdsRateLimiter } from "./pds-rate-limit.js";
+import { atProtoSecretValues } from "./secret-values.js";
+import { synchronizeSecretStoreEntries } from "./secrets-store.js";
 
 const RAW_ARGS = process.argv.slice(2);
 const DEPLOYMENT_NAME = environmentFromArgs(RAW_ARGS);
@@ -373,18 +375,6 @@ function runOp(args: readonly string[], input?: string): string {
 }
 
 
-function savePasswordToGitHubEnvironment(name: string, password: string): void {
-	const result = spawnSync("gh", ["secret", "set", name, "--env", DEPLOYMENT.name], {
-		input: password,
-		encoding: "utf8",
-		stdio: ["pipe", "inherit", "inherit"],
-	});
-	if (result.error) throw result.error;
-	if (result.status !== 0) {
-		throw new Error(`Could not update ${name} in the ${DEPLOYMENT.name} GitHub Environment`);
-	}
-	log("github", `Updated ${name} in the ${DEPLOYMENT.name} GitHub Environment`);
-}
 function addKvConfig(
 	channelId: string,
 	youtubeHandle: string,
@@ -554,19 +544,23 @@ async function main() {
 		log("plc", `  (use - for already-confirmed email tokens)`);
 	}
 
-	// Phase 7: publish the account passwords to the selected GitHub Environment.
-	// The deployment workflow copies them into that environment's Secrets Store.
+	// Phase 7: back up the account passwords and publish them directly to the
+	// selected Cloudflare Secrets Store.  1Password remains the recovery source
+	// for account deletion and operational recovery; GitHub never receives them.
 	backupPasswordTo1Password(mainHandle, mainPassword, mainEmail, state.mainPlcKeyHex!);
 	backupPasswordTo1Password(rtHandle, rtPassword, rtEmail, state.rtPlcKeyHex!);
-	savePasswordToGitHubEnvironment(`ATPROTO_PASSWORD_${channelId}`, mainPassword);
-	savePasswordToGitHubEnvironment(`ATPROTO_PASSWORD_${channelId}_RT`, rtPassword);
+	await synchronizeSecretStoreEntries(
+		DEPLOYMENT,
+		cloudflareApiToken,
+		atProtoSecretValues(DEPLOYMENT.name, channelId, mainPassword, rtPassword),
+	);
 
 	// Seed KV only after the selected deployment has installed and activated the
 	// corresponding Worker bindings. This keeps the poller from observing a user
 	// row before its password bindings exist.
 	if (!flags.includes("--seed-kv")) {
 		log("main", "");
-		log("main", `Accounts and ${DEPLOYMENT.name} GitHub secrets are ready.`);
+		log("main", `Accounts and ${DEPLOYMENT.name} Secrets Store entries are ready.`);
 		log("main", `Deploy ${DEPLOYMENT.name}, then re-run with --seed-kv:`);
 		log("main", `  npx tsx scripts/provision-account.ts ${channelId} ${youtubeHandle} - - - - --environment ${DEPLOYMENT.name} --max=${maxItems} --seed-kv`);
 		return;
@@ -588,7 +582,7 @@ async function main() {
 	log("main", `Main: https://bsky.app/profile/${mainHandle}.${PDS_HOST}`);
 	log("main", `RT:   https://bsky.app/profile/${rtHandle}.${PDS_HOST}`);
 	log("main", `maxItems cap: ${maxItems}`);
-	log("main", "Passwords are in the selected GitHub Environment and the youtube-mirror 1Password vault.");
+	log("main", "Passwords are backed up in the youtube-mirror 1Password vault and stored in the selected Cloudflare Secrets Store.");
 }
 
 main().catch((e) => {

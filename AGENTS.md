@@ -94,18 +94,16 @@ Set these secrets separately in both environments:
 - `CLOUDFLARE_API_TOKEN`
 - `OIDC_SIGNING_KEY`
 - `FIRECRAWL_API_TOKEN`
-- `ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ`
-- `ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ_RT`
 - `GATEWAY_INGEST_BEARER`
 
 Secret sources:
 
 - Create a new OIDC keypair and gateway bearer for each environment. The private key and bearer are write-only operational secrets.
-- `FIRECRAWL_API_TOKEN` comes from the 1Password environment `bykx5xzmykwxw3of4gtncs7i7i`.
-- ATProto passwords come from the `youtube-mirror` 1Password vault. PPE uses its own accounts and passwords.
+- `FIRECRAWL_API_TOKEN` comes from the 1Password environment `bykx5xzmykwxw3of4gtncs7i7`.
+- Back up each ATProto account password in the `youtube-mirror` 1Password vault and retain that backup for account recovery and deprovisioning. Write the password directly to the selected Cloudflare Secrets Store during account provisioning. PPE uses its own accounts and passwords; CI does not receive plaintext ATProto passwords.
 - Create one token per Cloudflare account. Grant Workers Scripts Write, Workflows Write, Workers KV Storage Read/Write, Secrets Store Read/Write, Workers Observability Write, and Account Settings Read. Do not retain repository-level Cloudflare credentials after cutover.
 
-Never print secret values. Before the first write, the deployment derives the public key from `OIDC_SIGNING_KEY` and requires it to match `OIDC_PUBLIC_JWK`. It then synchronizes Secrets Store entries and polls the full paginated inventory under one 60-second deadline until every required entry is active. It uploads `INGEST_BEARER` with `wrangler secret bulk --config` after setting the selected `CLOUDFLARE_ACCOUNT_ID`; do not use Wrangler Action's generic secret helper for this custom config.
+Never print secret values. Before the first write, the deployment derives the public key from `OIDC_SIGNING_KEY` and requires it to match `OIDC_PUBLIC_JWK`. Deployment sync handles `OIDC_SIGNING_KEY` and `FIRECRAWL_API_TOKEN` from GitHub for now; ATProto passwords are written to the selected Secrets Store during provisioning instead. The gateway bearer remains a GitHub Environment secret and is uploaded separately with `wrangler secret bulk --config` after setting the selected `CLOUDFLARE_ACCOUNT_ID`. CI verifies the Store's active metadata and deployed bindings without receiving plaintext ATProto passwords. It polls the full paginated inventory under one 60-second deadline until every required entry is active; do not use Wrangler Action's generic secret helper for this custom config.
 
 ## Deployment and PPE cleanup
 
