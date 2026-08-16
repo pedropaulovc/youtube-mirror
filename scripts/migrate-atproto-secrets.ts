@@ -14,6 +14,7 @@ async function main(): Promise<void> {
 	const token = requireSecret("CLOUDFLARE_API_TOKEN");
 	const values = environment.channelIds.flatMap((channelId) =>
 		atProtoSecretValues(
+			environment.name,
 			channelId,
 			requireSecret(`ATPROTO_PASSWORD_${channelId}`),
 			requireSecret(`ATPROTO_PASSWORD_${channelId}_RT`),

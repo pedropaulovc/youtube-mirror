@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { atProtoSecretValues, deploymentSecretValues } from "../../scripts/secret-values";
+import { synchronizeSecretStoreEntries } from "../../scripts/secrets-store";
+import type { DeploymentEnvironment } from "../../scripts/deployment-environment";
+
+vi.mock("node:child_process", () => ({ spawnSync: vi.fn() }));
 
 describe("Secrets Store value contracts", () => {
 	it("keeps deployment synchronization limited to deployment credentials", () => {
@@ -9,16 +13,29 @@ describe("Secrets Store value contracts", () => {
 		]);
 	});
 
-	it("builds both ATProto entries for the selected channel", () => {
-		expect(atProtoSecretValues("UCchannel", "main-password", "rt-password")).toEqual([
+	it("tags ATProto entries with their deployment environment", () => {
+		expect(atProtoSecretValues("ppe", "UCchannel", "main-password", "rt-password")).toEqual([
 			{
 				name: "youtube-mirror-atproto-password-UCchannel",
 				value: "main-password",
+				environment: "ppe",
 			},
 			{
 				name: "youtube-mirror-atproto-password-UCchannel-rt",
 				value: "rt-password",
+				environment: "ppe",
 			},
 		]);
+	});
+	it("rejects values tagged for a different deployment", async () => {
+		const production = { name: "production" } as DeploymentEnvironment;
+
+		await expect(
+			synchronizeSecretStoreEntries(
+				production,
+				"unused-token",
+				atProtoSecretValues("ppe", "UCchannel", "main-password", "rt-password"),
+			),
+		).rejects.toThrow("targets a different environment");
 	});
 });

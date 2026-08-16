@@ -3,7 +3,6 @@ import type { DeploymentEnvironment } from "./deployment-environment.js";
 import type { SecretValue } from "./secret-values.js";
 
 const PER_PAGE = 100;
-const MAX_CHILD_DIAGNOSTIC_LENGTH = 1_000;
 
 type JsonObject = Record<string, unknown>;
 function isObject(value: unknown): value is JsonObject {
@@ -15,13 +14,6 @@ function requireInteger(value: unknown, field: string): number {
 		throw new Error(`Cloudflare response has invalid ${field}`);
 	}
 	return value as number;
-}
-function sanitizeDiagnostic(output: string): string {
-	return output
-		.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
-		.replace(/((?:["']?(?:token|secret|password|credential)["']?)\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)/gi, "$1[REDACTED]")
-		.trim()
-		.slice(0, MAX_CHILD_DIAGNOSTIC_LENGTH);
 }
 
 async function listSecretIds(environment: DeploymentEnvironment, token: string): Promise<Map<string, string>> {
@@ -93,6 +85,8 @@ function runWrangler(
 		input,
 		encoding: "utf8",
 		stdio: ["pipe", "pipe", "pipe"],
+		timeout: 60_000,
+		killSignal: "SIGTERM",
 		env: {
 			...process.env,
 			CLOUDFLARE_ACCOUNT_ID: environment.accountId,
@@ -101,11 +95,11 @@ function runWrangler(
 	});
 	if (result.error) throw result.error;
 	if (result.status !== 0) {
-		const details = sanitizeDiagnostic(result.stderr.toString());
 		throw new Error(
-			`Wrangler Secrets Store command failed (exit ${result.status ?? "unknown"}${details ? `: ${details}` : ""})`,
+			`Wrangler Secrets Store command failed (exit ${result.status ?? "unknown"})`,
 		);
 	}
+
 }
 
 export async function synchronizeSecretStoreEntries(
@@ -115,6 +109,12 @@ export async function synchronizeSecretStoreEntries(
 ): Promise<void> {
 	const names = new Set<string>();
 	for (const secret of values) {
+		if (
+			secret.environment !== undefined &&
+			secret.environment !== environment.name
+		) {
+			throw new Error(`Secrets Store entry ${secret.name} targets a different environment`);
+		}
 		if (!secret.name || !secret.value) throw new Error("Secrets Store entries require non-empty names and values");
 		if (!names.add(secret.name)) throw new Error(`Duplicate Secrets Store entry ${secret.name}`);
 	}

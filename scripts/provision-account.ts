@@ -552,7 +552,7 @@ async function main() {
 	await synchronizeSecretStoreEntries(
 		DEPLOYMENT,
 		cloudflareApiToken,
-		atProtoSecretValues(channelId, mainPassword, rtPassword),
+		atProtoSecretValues(DEPLOYMENT.name, channelId, mainPassword, rtPassword),
 	);
 
 	// Seed KV only after the selected deployment has installed and activated the
