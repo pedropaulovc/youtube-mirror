@@ -79,10 +79,6 @@ jobs:
       ENABLE_SCHEDULES: ${{ vars.ENABLE_SCHEDULES }}
       OIDC_SIGNING_KEY: ${{ secrets.OIDC_SIGNING_KEY }}
       FIRECRAWL_API_TOKEN: ${{ secrets.FIRECRAWL_API_TOKEN }}
-      ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ: ${{ secrets.ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ }}
-      ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ_RT: ${{ secrets.ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ_RT }}
-      ATPROTO_PASSWORD_UCktCGXaNOhayFRU823ScWuA: ${{ secrets.ATPROTO_PASSWORD_UCktCGXaNOhayFRU823ScWuA }}
-      ATPROTO_PASSWORD_UCktCGXaNOhayFRU823ScWuA_RT: ${{ secrets.ATPROTO_PASSWORD_UCktCGXaNOhayFRU823ScWuA_RT }}
       GATEWAY_INGEST_BEARER: ${{ secrets.GATEWAY_INGEST_BEARER }}
     steps:
       - name: Checkout repository
@@ -93,8 +89,6 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
-      - name: Migrate ATProto passwords into Cloudflare Secrets Store
-        run: npx tsx scripts/migrate-atproto-secrets.ts --environment production
       - name: Deploy production in dependency order
         run: npm run deploy:production
       - name: Seed cncdan channel KV
