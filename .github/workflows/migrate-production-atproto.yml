@@ -1,0 +1,73 @@
+name: Migrate and deploy production ATProto secrets
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Confirm the production ATProto migration and deployment
+        required: true
+        type: boolean
+
+concurrency:
+  group: migrate-production-atproto
+  cancel-in-progress: false
+
+jobs:
+  migrate-and-deploy:
+    if: inputs.confirm == true
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    env:
+      DEPLOY_ENVIRONMENT: production
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      KV_NAMESPACE_ID: ${{ vars.KV_NAMESPACE_ID }}
+      SECRETS_STORE_ID: ${{ vars.SECRETS_STORE_ID }}
+      WORKERS_DEV_SUBDOMAIN: ${{ vars.WORKERS_DEV_SUBDOMAIN }}
+      OIDC_ISSUER_URL: ${{ vars.OIDC_ISSUER_URL }}
+      TELEMETRY_GATEWAY_ORIGIN: ${{ vars.TELEMETRY_GATEWAY_ORIGIN }}
+      OIDC_SIGNING_KID: ${{ vars.OIDC_SIGNING_KID }}
+      OIDC_PUBLIC_JWK: ${{ vars.OIDC_PUBLIC_JWK }}
+      GCP_WORKLOAD_PROVIDER: ${{ vars.GCP_WORKLOAD_PROVIDER }}
+      GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_APP_CLIENT_ID: ${{ vars.AZURE_APP_CLIENT_ID }}
+      OTLP_TRACES_ENDPOINT: ${{ vars.OTLP_TRACES_ENDPOINT }}
+      OTLP_METRICS_ENDPOINT: ${{ vars.OTLP_METRICS_ENDPOINT }}
+      OTLP_LOGS_ENDPOINT: ${{ vars.OTLP_LOGS_ENDPOINT }}
+      MIRROR_CHANNEL_IDS: ${{ vars.MIRROR_CHANNEL_IDS }}
+      ENABLE_SCHEDULES: ${{ vars.ENABLE_SCHEDULES }}
+      OIDC_SIGNING_KEY: ${{ secrets.OIDC_SIGNING_KEY }}
+      FIRECRAWL_API_TOKEN: ${{ secrets.FIRECRAWL_API_TOKEN }}
+      GATEWAY_INGEST_BEARER: ${{ secrets.GATEWAY_INGEST_BEARER }}
+      ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ: ${{ secrets.ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ }}
+      ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ_RT: ${{ secrets.ATPROTO_PASSWORD_UC5NO8MgTQKHAWXp6z8Xl7yQ_RT }}
+      ATPROTO_PASSWORD_UCktCGXaNOhayFRU823ScWuA: ${{ secrets.ATPROTO_PASSWORD_UCktCGXaNOhayFRU823ScWuA }}
+      ATPROTO_PASSWORD_UCktCGXaNOhayFRU823ScWuA_RT: ${{ secrets.ATPROTO_PASSWORD_UCktCGXaNOhayFRU823ScWuA_RT }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Migrate ATProto passwords into Cloudflare Secrets Store
+        run: npx tsx scripts/migrate-atproto-secrets.ts --environment production
+      - name: Deploy production in dependency order
+        run: npm run deploy:production
+      - name: Seed cncdan channel KV
+        run: >-
+          npx tsx scripts/seed-channel.ts
+          UCktCGXaNOhayFRU823ScWuA
+          cncdan
+          cncdan-mirr.selfhosted.social
+          cncdan-mir-rt.selfhosted.social
+          pedro+youtube-mirror-cncdan@vza.net
+          pedro+youtube-mirror-cncdan-rt@vza.net
+          --environment production --commit
