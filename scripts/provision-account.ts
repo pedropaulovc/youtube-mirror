@@ -6,6 +6,7 @@ import { AtpAgent } from "@atproto/api";
 import type { ChannelConfig } from "../worker/types.js";
 import { ensureOpEnv } from "./op-bootstrap.js";
 import { environmentFromArgs, parseDeploymentEnvironment } from "./deployment-environment.js";
+import { PdsRateLimiter } from "./pds-rate-limit.js";
 
 const RAW_ARGS = process.argv.slice(2);
 const DEPLOYMENT_NAME = environmentFromArgs(RAW_ARGS);
@@ -35,51 +36,14 @@ const DEFAULT_POLL_INTERVAL_MINUTES = 15;
 
 // ── PDS Login Rate Limiter ─────────────────────────────────────────────
 // selfhosted.social enforces ~5 logins per 5-minute sliding window.
-// Proactive limiter prevents most 429s; retry-after fallback handles the rest.
-const PDS_LOGIN_LIMIT = 4;
-const PDS_LOGIN_WINDOW_MS = 300_000;
-const pdsLoginTimestamps: number[] = [];
-
-function pdsRateLimitPurge(): void {
-	const now = Date.now();
-	while (pdsLoginTimestamps.length > 0 && pdsLoginTimestamps[0] <= now - PDS_LOGIN_WINDOW_MS) {
-		pdsLoginTimestamps.shift();
-	}
-}
-
-async function pdsRateLimitWait(): Promise<void> {
-	pdsRateLimitPurge();
-	if (pdsLoginTimestamps.length >= PDS_LOGIN_LIMIT) {
-		const waitMs = pdsLoginTimestamps[0] + PDS_LOGIN_WINDOW_MS - Date.now() + 1_000;
-		log("rate-limit", `PDS login limit reached (${PDS_LOGIN_LIMIT}/5min), waiting ${Math.ceil(waitMs / 1000)}s...`);
-		await new Promise((r) => setTimeout(r, waitMs));
-	}
-	pdsLoginTimestamps.push(Date.now());
-}
-
-function getRetryAfterSec(error: unknown): number | null {
-	const headers = (error as { headers?: Record<string, string> })?.headers;
-	if (!headers) return null;
-	const val = headers["retry-after"] ?? headers["x-ratelimit-after"];
-	if (!val) return null;
-	const seconds = Number(val);
-	return Number.isFinite(seconds) ? seconds : null;
-}
+// The limiter spaces proactive attempts and retries repeated 429 responses
+// with bounded exponential backoff when the PDS supplies no useful delay.
+const pdsLoginLimiter = new PdsRateLimiter({
+	log: (message) => log("rate-limit", message),
+});
 
 async function pdsRateLimitedLogin(agent: AtpAgent, identifier: string, password: string): Promise<void> {
-	await pdsRateLimitWait();
-	try {
-		await agent.login({ identifier, password });
-	} catch (error: unknown) {
-		const retryAfter = getRetryAfterSec(error);
-		if (retryAfter === null) throw error;
-		const waitSec = Math.max(retryAfter, 30);
-		log("rate-limit", `PDS returned retry-after ${retryAfter}s, waiting ${waitSec}s...`);
-		pdsLoginTimestamps.pop();
-		await new Promise((r) => setTimeout(r, waitSec * 1000));
-		pdsLoginTimestamps.push(Date.now());
-		await agent.login({ identifier, password });
-	}
+	await pdsLoginLimiter.login(() => agent.login({ identifier, password }).then(() => undefined));
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
