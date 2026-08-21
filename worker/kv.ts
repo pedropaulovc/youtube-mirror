@@ -1,6 +1,27 @@
 import { normalizeChannelId } from "./handles";
 import type { CachedSession, ChannelConfig, ChannelMeta, MirroredRecord } from "./types";
 
+const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
+
+export function parseConfiguredChannelIds(value: unknown): string[] {
+	if (typeof value !== "string") {
+		throw new Error("MIRROR_CHANNEL_IDS binding is missing");
+	}
+
+	const ids = [...new Set(value.split(",").map(normalizeChannelId).filter(Boolean))];
+	if (ids.length === 0 || ids.some((id) => !CHANNEL_ID.test(id))) {
+		throw new Error("MIRROR_CHANNEL_IDS binding must be a comma-separated list of valid YouTube channel IDs");
+	}
+	return ids;
+}
+
+export function parseConfiguredChannelIdsFromEnvironment(environment: unknown): string[] {
+	if (typeof environment !== "object" || environment === null) {
+		return parseConfiguredChannelIds(undefined);
+	}
+	return parseConfiguredChannelIds((environment as Record<string, unknown>).MIRROR_CHANNEL_IDS);
+}
+
 /**
  * Typed wrapper around KVNamespace that centralizes key formatting and
  * eliminates raw `as unknown as T` casts for KV reads.
@@ -18,19 +39,6 @@ export class KvStore {
 
 	async getChannelConfig(channelId: string): Promise<ChannelConfig | null> {
 		return this.kv.get<ChannelConfig>(`users:${normalizeChannelId(channelId)}`, "json");
-	}
-
-	async listChannelIds(): Promise<string[]> {
-		// Page through every `users:` key. KV.list returns at most 1000 keys per call;
-		// a single call would silently stop polling channels past the first page.
-		const ids: string[] = [];
-		let cursor: string | undefined;
-		do {
-			const page = await this.kv.list({ prefix: "users:", cursor });
-			for (const k of page.keys) ids.push(normalizeChannelId(k.name.replace("users:", "")));
-			cursor = page.list_complete ? undefined : page.cursor;
-		} while (cursor);
-		return ids;
 	}
 
 	// --- Mirrored records ---

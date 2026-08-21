@@ -54,6 +54,12 @@ KV keys:
 | `session:{atProtoAccount}` | cached Bluesky session with expiry |
 | `gcp-token:{serviceAccount}` | cached GCP access token with expiry |
 
+## Operational learnings
+
+- Scheduled channel, delete, and profile Workers use the validated `MIRROR_CHANNEL_IDS` deployment variable. They must not call `KV.list` on every cron invocation: the Free-plan KV quota combines write, delete, and list requests at 1,000 per day, so the minute channel cron alone exceeds it.
+- The channel cron remains `* * * * *`. `worker/schedule.ts` assigns channels to poll-minute buckets with modulo arithmetic; changing the trigger to `*/30` would starve channels assigned to other buckets. Change stored `pollIntervalMinutes` values when changing poll cadence.
+- Cloudflare Observability destination activity is not proof of Azure ingestion. Validate authenticated OTLP logs/traces with unique markers and confirm matching records in the selected Azure destination; HTTP 200 from the gateway can also represent an intentional drop for an invalid bearer.
+
 ## Cloudflare account boundaries
 
 | Environment | Account ID | State | Credentials | Worker origins |
