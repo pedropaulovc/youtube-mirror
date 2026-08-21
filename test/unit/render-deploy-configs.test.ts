@@ -35,6 +35,10 @@ describe("renderConfig", () => {
 		const rendered = renderConfig("wrangler.mirror-channel.jsonc", { name: "youtube-mirror-channel" }, environment);
 		expect(rendered.account_id).toBe(environment.accountId);
 		expect(rendered.kv_namespaces).toEqual([{ binding: "KV", id: environment.kvNamespaceId }]);
+		expect(rendered.vars).toMatchObject({
+			DEPLOYMENT_ENVIRONMENT: environment.name,
+			MIRROR_CHANNEL_IDS: environment.channelIds.join(","),
+		});
 		expect(rendered.secrets_store_secrets).toEqual([
 			{
 				binding: "OIDC_SIGNING_KEY",

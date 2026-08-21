@@ -1,7 +1,7 @@
 export { MirrorProfileWorkflow } from "./profile-sync-workflow";
 
 import { createWorkflowWithRetry } from "./cron-dispatch";
-import { KvStore } from "./kv";
+import { parseConfiguredChannelIdsFromEnvironment } from "./kv";
 
 export default {
 	async fetch(): Promise<Response> {
@@ -9,7 +9,7 @@ export default {
 	},
 
 	async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
-		const channelIds = await new KvStore(env.KV).listChannelIds();
+		const channelIds = parseConfiguredChannelIdsFromEnvironment(env);
 
 		console.log({ tag: "cron", worker: "mirror-profile", totalChannels: channelIds.length, message: `mirror-profile cron: dispatching ${channelIds.length} channels` });
 

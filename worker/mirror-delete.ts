@@ -1,7 +1,7 @@
 export { MirrorDeleteWorkflow } from "./delete-workflow";
 
 import { createWorkflowWithRetry } from "./cron-dispatch";
-import { KvStore } from "./kv";
+import { parseConfiguredChannelIdsFromEnvironment } from "./kv";
 
 export default {
 	async fetch(): Promise<Response> {
@@ -9,7 +9,7 @@ export default {
 	},
 
 	async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
-		const channelIds = await new KvStore(env.KV).listChannelIds();
+		const channelIds = parseConfiguredChannelIdsFromEnvironment(env);
 
 		console.log({ tag: "cron", worker: "mirror-delete", totalChannels: channelIds.length, message: `mirror-delete cron: dispatching ${channelIds.length} channels` });
 

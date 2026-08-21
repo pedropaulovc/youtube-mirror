@@ -2,7 +2,7 @@ export { MirrorChannelWorkflow } from "./workflow";
 
 import { createWorkflowWithRetry } from "./cron-dispatch";
 import { getScheduledChannels } from "./schedule";
-import { KvStore } from "./kv";
+import { KvStore, parseConfiguredChannelIdsFromEnvironment } from "./kv";
 import { DEFAULT_POLL_INTERVAL_MINUTES } from "./constants";
 
 // A malformed KV value (0, negative, NaN) would make `index % interval` evaluate to
@@ -19,7 +19,7 @@ export default {
 
 	async scheduled(controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
 		const kv = new KvStore(env.KV);
-		const channelIds = await kv.listChannelIds();
+		const channelIds = parseConfiguredChannelIdsFromEnvironment(env);
 
 		const configs = await Promise.all(
 			channelIds.map(async (channelId) => {

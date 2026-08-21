@@ -66,6 +66,7 @@ export function renderConfig(
 			OIDC_SIGNING_KID: environment.oidcSigningKid,
 			GCP_WORKLOAD_PROVIDER: environment.gcpWorkloadProvider,
 			GCP_SERVICE_ACCOUNT: environment.gcpServiceAccount,
+			MIRROR_CHANNEL_IDS: environment.channelIds.join(","),
 		};
 		rendered.kv_namespaces = [{ binding: "KV", id: environment.kvNamespaceId }];
 		rendered.secrets_store_secrets = contentBindings(configPath, environment);
