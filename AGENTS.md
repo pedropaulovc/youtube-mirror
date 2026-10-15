@@ -59,6 +59,7 @@ KV keys:
 - Scheduled channel, delete, and profile Workers use the validated `MIRROR_CHANNEL_IDS` deployment variable. They must not call `KV.list` on every cron invocation: the Free-plan KV quota combines write, delete, and list requests at 1,000 per day, so the minute channel cron alone exceeds it.
 - The channel cron remains `* * * * *`. `worker/schedule.ts` assigns channels to poll-minute buckets with modulo arithmetic; changing the trigger to `*/30` would starve channels assigned to other buckets. Change stored `pollIntervalMinutes` values when changing poll cadence.
 - Cloudflare Observability destination activity is not proof of Azure ingestion. Validate authenticated OTLP logs/traces with unique markers and confirm matching records in the selected Azure destination; HTTP 200 from the gateway can also represent an intentional drop for an invalid bearer.
+- YouTube item IDs are opaque and can contain characters Cloudflare rejects in Workflow instance IDs. Keep `itemWorkflowId` as the sole conversion boundary: preserve valid IDs and deterministically hash invalid or overlong IDs; do not interpolate raw item IDs into Workflow IDs elsewhere.
 
 ## Cloudflare account boundaries
 

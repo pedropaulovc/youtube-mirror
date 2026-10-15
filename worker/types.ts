@@ -1,3 +1,4 @@
+import { base64url } from "./base64url";
 import { normalizeChannelId } from "./handles";
 
 // --- Helpers ---
@@ -5,8 +6,19 @@ import { normalizeChannelId } from "./handles";
 export type ItemKind = "video" | "community" | "comment";
 
 /** Deterministic workflow ID — one workflow per (channel, kind, item) triple. */
-export function itemWorkflowId(channelId: string, kind: ItemKind, itemId: string): string {
-	return `item-${normalizeChannelId(channelId)}-${kind}-${itemId}`;
+export function itemWorkflowId(
+	channelId: string,
+	kind: ItemKind,
+	itemId: string,
+): string | Promise<string> {
+	const normalizedChannelId = normalizeChannelId(channelId);
+	const generatedId = `item-${normalizedChannelId}-${kind}-${itemId}`;
+	if (generatedId.length <= 100 && /^[A-Za-z0-9_-]+$/.test(generatedId)) return generatedId;
+
+	const tuple = JSON.stringify([normalizedChannelId, kind, itemId]);
+	return crypto.subtle
+		.digest("SHA-256", new TextEncoder().encode(tuple))
+		.then((digest) => `item-${base64url(digest)}`);
 }
 
 // --- KV Schema Types ---

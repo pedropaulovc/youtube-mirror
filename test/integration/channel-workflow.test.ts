@@ -1,8 +1,8 @@
 // @ts-nocheck
 import { env, introspectWorkflowInstance } from "cloudflare:test";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { ChannelMeta } from "../../worker/types";
-import { makeChannelConfig, makeVideo, TEST_CHANNEL_ID } from "../helpers/factories";
+import { itemWorkflowId, type ChannelMeta, type MirroredRecord } from "../../worker/types";
+import { makeChannelConfig, makeComment, makeVideo, TEST_CHANNEL_ID } from "../helpers/factories";
 
 // The worker's main module imports @atproto/api, which crashes on import in the
 // Workers test runtime. Mock it (workflow steps here are mocked via mockStepResult).
@@ -59,6 +59,11 @@ describe.sequential("MirrorChannelWorkflow orchestration", () => {
 		await env.KV.put(`users:${TEST_CHANNEL_ID}`, JSON.stringify(config));
 
 		const video = makeVideo({ id: "new-vid" });
+		const itemId = `item-${TEST_CHANNEL_ID}-video-${video.id}`;
+		await using itemInstance = await introspectWorkflowInstance(env.ITEM_WORKFLOW, itemId);
+		await itemInstance.modify(async (m) => {
+			await m.mockStepResult({ name: `post-video-${video.id}` }, "mocked");
+		});
 		const instanceId = `channel-dispatch-${Date.now()}`;
 		await using instance = await introspectWorkflowInstance(env.CHANNEL_WORKFLOW, instanceId);
 		await instance.modify(async (m) => {
@@ -69,9 +74,73 @@ describe.sequential("MirrorChannelWorkflow orchestration", () => {
 		await env.CHANNEL_WORKFLOW.create({ id: instanceId, params: { channelId: TEST_CHANNEL_ID } });
 		await instance.waitForStatus("complete", { timeout: 8000 });
 
-		// The dispatched item workflow uses the deterministic id item-{channel}-video-{id}.
-		const child = await env.ITEM_WORKFLOW.get(`item-${TEST_CHANNEL_ID}-video-${video.id}`);
+		const result = await itemInstance.waitForStepResult({ name: `post-video-${video.id}` });
+		expect(result).toBe("mocked");
+		await itemInstance.waitForStatus("complete", { timeout: 8000 });
+		const child = await env.ITEM_WORKFLOW.get(itemId);
 		expect(child).not.toBeNull();
+	}, 20_000);
+
+	it("dispatches dotted comments and advances the cursor after successful dispatch", async () => {
+		const config = makeChannelConfig({ mirrorCommunity: false });
+		await env.KV.put(`users:${TEST_CHANNEL_ID}`, JSON.stringify(config));
+
+		const video = makeVideo({ id: "comment-parent-video", publishedAt: new Date().toISOString() });
+		const videoRecord: MirroredRecord = {
+			bskyUri: "at://x",
+			bskyCid: "c",
+			account: "main",
+			kind: "video",
+			createdAt: new Date().toISOString(),
+		};
+		await env.KV.put(`mirrored:${TEST_CHANNEL_ID}:${video.id}`, JSON.stringify(videoRecord));
+
+		const firstPublishedAt = new Date(Date.now() - 10_000).toISOString();
+		const lastPublishedAt = new Date(Date.now() - 5_000).toISOString();
+		const comment = makeComment({
+			id: "Ugz.comment.with.dots",
+			parentItemId: video.id,
+			videoId: video.id,
+			publishedAt: firstPublishedAt,
+		});
+		const laterComment = makeComment({
+			id: "Ugz_following_comment",
+			parentItemId: video.id,
+			videoId: video.id,
+			publishedAt: lastPublishedAt,
+		});
+		const comments = [comment, laterComment];
+		const safeId = await itemWorkflowId(TEST_CHANNEL_ID, "comment", comment.id);
+		const laterItemId = await itemWorkflowId(TEST_CHANNEL_ID, "comment", laterComment.id);
+		await using itemInstance = await introspectWorkflowInstance(env.ITEM_WORKFLOW, safeId);
+		await using laterItemInstance = await introspectWorkflowInstance(env.ITEM_WORKFLOW, laterItemId);
+		await itemInstance.modify(async (m) => {
+			await m.mockStepResult({ name: `post-comment-${comment.id}` }, "mocked");
+		});
+		await laterItemInstance.modify(async (m) => {
+			await m.mockStepResult({ name: `post-comment-${laterComment.id}` }, "mocked");
+		});
+		const instanceId = `channel-dotted-comment-${Date.now()}`;
+		await using instance = await introspectWorkflowInstance(env.CHANNEL_WORKFLOW, instanceId);
+		await instance.modify(async (m) => {
+			await m.mockStepResult({ name: `youtube-token-${TEST_CHANNEL_ID}` }, "fake-token");
+			await m.mockStepResult({ name: `fetch-videos-${TEST_CHANNEL_ID}` }, [video]);
+			await m.mockStepResult({ name: `fetch-comments-${video.id}` }, comments);
+		});
+
+		await env.CHANNEL_WORKFLOW.create({ id: instanceId, params: { channelId: TEST_CHANNEL_ID } });
+		await instance.waitForStatus("complete", { timeout: 8000 });
+
+		expect(await itemInstance.waitForStepResult({ name: `post-comment-${comment.id}` })).toBe("mocked");
+		expect(await laterItemInstance.waitForStepResult({ name: `post-comment-${laterComment.id}` })).toBe("mocked");
+		await Promise.all([
+			itemInstance.waitForStatus("complete", { timeout: 8000 }),
+			laterItemInstance.waitForStatus("complete", { timeout: 8000 }),
+		]);
+		expect(safeId).not.toContain(comment.id);
+		expect(await env.ITEM_WORKFLOW.get(safeId)).not.toBeNull();
+		expect(await env.ITEM_WORKFLOW.get(laterItemId)).not.toBeNull();
+		expect(await env.KV.get(`comment-cursor:${TEST_CHANNEL_ID}:${video.id}`, "text")).toBe(firstPublishedAt);
 	}, 20_000);
 
 	it("skips the community scrape until its polling interval elapses", async () => {
