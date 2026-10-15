@@ -5,6 +5,8 @@
 // worker. Each cloud fetches that issuer's JWKS to verify the signature, then hands
 // back a cloud access token. This module owns the signing; callers own the exchange.
 
+import { base64url } from "./base64url";
+
 export interface AssertionParams {
   issuer: string;
   subject: string;
@@ -12,15 +14,6 @@ export interface AssertionParams {
   kid: string;
   privateKeyPem: string;
   ttlSeconds?: number;
-}
-
-function base64url(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (const b of bytes) {
-    binary += String.fromCharCode(b);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function pemToArrayBuffer(pem: string): ArrayBuffer {

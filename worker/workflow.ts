@@ -118,7 +118,8 @@ export class MirrorChannelWorkflow extends WorkflowEntrypoint<Env, MirrorChannel
 		item: ContentItem,
 		parentWorkflowId: string,
 	): Promise<boolean> {
-		const id = itemWorkflowId(channelId, item.kind, item.id);
+		const idOrPromise = itemWorkflowId(channelId, item.kind, item.id);
+		const id = typeof idOrPromise === "string" ? idOrPromise : await idOrPromise;
 		try {
 			await createWorkflowWithRetry(this.env.ITEM_WORKFLOW, id, { item, channelId, channelConfig, parentWorkflowId });
 			return true;
