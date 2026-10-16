@@ -66,6 +66,24 @@ curl --fail "$OIDC_ISSUER_URL/.well-known/jwks.json" | jq --arg kid "$OIDC_SIGNI
 
 The verifier checks the account allowlist, KV and store ownership, workers.dev subdomain ownership, active Secrets Store metadata across every page, deployed binding IDs, discovery origin, and full JWK. For telemetry, send an authenticated OTLP logs and traces payload to `TELEMETRY_GATEWAY_ORIGIN`. A request with the wrong bearer can be accepted and dropped, so HTTP status alone is not proof; confirm the record in the selected Azure destination.
 
+### Telemetry environment label
+
+Each environment's telemetry gateway stamps the OpenTelemetry resource attribute `deployment.environment.name` (`production` or `ppe`) on every forwarded log and span resource, including Cloudflare's automatic KV spans. The value comes from the gateway's rendered `DEPLOYMENT_ENVIRONMENT`; any value in the incoming OTLP payload is replaced, and other resource attributes are kept. Filter and group on it in the backing Log Analytics workspace (`az monitor log-analytics query`) rather than inferring the environment from Worker names.
+
+Count KV operations by environment, operation, and entrypoint. Aggregate only; do not project `cloudflare.kv.query.keys`, key prefixes, or item IDs:
+
+```kusto
+OTelSpans
+| where TimeGenerated > ago(1d)
+| where Name in ("kv_get", "kv_put", "kv_delete", "kv_list")
+| extend environment = tostring(ResourceAttributes["deployment.environment.name"]),
+    entrypoint = coalesce(tostring(Attributes["cloudflare.entrypoint"]), tostring(ResourceAttributes["cloudflare.entrypoint"]))
+| summarize operations = count() by environment, operation = Name, entrypoint
+| order by operations desc
+```
+
+The same label is on logs, for example `OTelLogs | where tostring(ResourceAttributes["deployment.environment.name"]) == "ppe" | summarize count() by bin(TimeGenerated, 1h)`. Records without the label predate this gateway change or bypassed the gateway.
+
 ## Retiring the old federation
 
 Keep the old GCP provider and Azure federated credential until production has completed token exchanges through both new providers. Then remove only the youtube-mirror provider, its obsolete service-account binding, and its Azure credential from the retired source deployment. Do not remove federation resources used by twitter-mirror or another service.

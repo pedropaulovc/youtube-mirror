@@ -2,6 +2,9 @@ import { signAssertion } from "./oidc-sign";
 import { encodeLogsRequest, encodeTraceRequest } from "./otlp-protobuf";
 
 interface Env {
+  // Rendered per environment by scripts/deployment-config.ts; authoritative label
+  // for every resource this gateway forwards (see stampDeploymentEnvironment).
+  DEPLOYMENT_ENVIRONMENT: "production" | "ppe";
   TENANT_ID: string;
   APP_CLIENT_ID: string;
   // Azure Monitor native OTLP/DCR ingestion endpoints (one per signal). Each is a
@@ -77,11 +80,49 @@ export async function getEntraToken(env: Env): Promise<string> {
 // parsed OTLP JSON to protobuf wire bytes.
 type OtlpEncoder = (json: Record<string, unknown>) => Uint8Array;
 
+// Standard OTel resource attribute (semconv `deployment.environment.name`).
+const DEPLOYMENT_ENVIRONMENT_ATTRIBUTE = "deployment.environment.name";
+
+interface OtlpSignal {
+  // Top-level OTLP JSON array holding per-resource batches for this signal.
+  resourcesKey: "resourceLogs" | "resourceSpans";
+  encode: OtlpEncoder;
+}
+
+const LOGS: OtlpSignal = { resourcesKey: "resourceLogs", encode: encodeLogsRequest };
+const TRACES: OtlpSignal = { resourcesKey: "resourceSpans", encode: encodeTraceRequest };
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+// Label every exported resource with this gateway's configured environment. The
+// gateway config, not the incoming payload, is authoritative: any incoming value for
+// the key is replaced, all other resource attributes are kept in order, and missing
+// resource/attribute containers are created.
+function stampDeploymentEnvironment(
+  json: Record<string, unknown>,
+  resourcesKey: OtlpSignal["resourcesKey"],
+  environment: Env["DEPLOYMENT_ENVIRONMENT"],
+): void {
+  const batches = json[resourcesKey];
+  if (!Array.isArray(batches)) return;
+  for (const batch of batches) {
+    if (!isObject(batch)) continue;
+    const resource: Record<string, unknown> = isObject(batch.resource) ? batch.resource : {};
+    batch.resource = resource;
+    const attributes: unknown[] = Array.isArray(resource.attributes) ? resource.attributes : [];
+    resource.attributes = [
+      ...attributes.filter((a) => !(isObject(a) && a.key === DEPLOYMENT_ENVIRONMENT_ATTRIBUTE)),
+      { key: DEPLOYMENT_ENVIRONMENT_ATTRIBUTE, value: { stringValue: environment } },
+    ];
+  }
+}
+
 async function forwardOtlp(
   request: Request,
   env: Env,
   endpoint: string,
-  encode: OtlpEncoder,
+  signal: OtlpSignal,
 ): Promise<Response> {
   // The Cloudflare Workers OTLP exporter authenticates to us with a shared bearer
   // (set on the observability destination). Reject anything else, but answer 200 so
@@ -89,6 +130,9 @@ async function forwardOtlp(
   const authHeader = request.headers.get("Authorization");
   if (authHeader !== `Bearer ${env.INGEST_BEARER}`) {
     return new Response("OK", { status: 200 });
+  }
+  if (env.DEPLOYMENT_ENVIRONMENT !== "production" && env.DEPLOYMENT_ENVIRONMENT !== "ppe") {
+    throw new Error("Invalid deployment environment");
   }
 
   const rawBytes = await request.arrayBuffer();
@@ -113,7 +157,9 @@ async function forwardOtlp(
     return new Response("OK", { status: 200 });
   }
 
-  const payload = encode(JSON.parse(jsonText) as Record<string, unknown>);
+  const json = JSON.parse(jsonText) as Record<string, unknown>;
+  stampDeploymentEnvironment(json, signal.resourcesKey, env.DEPLOYMENT_ENVIRONMENT);
+  const payload = signal.encode(json);
   if (payload.byteLength === 0) {
     return new Response("OK", { status: 200 });
   }
@@ -155,8 +201,8 @@ export default {
     // Cloudflare Workers observability emits only logs + traces (no metrics), so
     // the metrics endpoint is left unwired.
     if (request.method === "POST") {
-      if (path === "/v1/traces") return forwardOtlp(request, env, env.OTLP_TRACES_ENDPOINT, encodeTraceRequest);
-      if (path === "/v1/logs") return forwardOtlp(request, env, env.OTLP_LOGS_ENDPOINT, encodeLogsRequest);
+      if (path === "/v1/traces") return forwardOtlp(request, env, env.OTLP_TRACES_ENDPOINT, TRACES);
+      if (path === "/v1/logs") return forwardOtlp(request, env, env.OTLP_LOGS_ENDPOINT, LOGS);
     }
 
     return new Response("OK", { status: 200 });

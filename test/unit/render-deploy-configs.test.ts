@@ -78,6 +78,16 @@ describe("renderConfig", () => {
 			},
 		]);
 	});
+
+	it.each(["production", "ppe"] as const)("labels the %s gateway with its deployment environment", (name) => {
+		const rendered = renderConfig(
+			"wrangler.mirror-telemetry-gateway.jsonc",
+			{ name: "youtube-mirror-telemetry-gateway" },
+			{ ...environment, name },
+		);
+		expect(rendered.vars).toMatchObject({ DEPLOYMENT_ENVIRONMENT: name });
+	});
+
 	it("renders Worker configs with entrypoints rooted at the repository", () => {
 		const rendered = renderConfigForDirectory(
 			"wrangler.mirror-oidc-issuer.jsonc",
